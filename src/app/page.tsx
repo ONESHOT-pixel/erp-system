@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Barcode from 'react-barcode';
 import { supabase } from '@/lib/supabaseClient';
-import { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType, AlignmentType, TextRun } from 'docx';
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType, AlignmentType, TextRun, TableLayoutType } from 'docx';
 import { saveAs } from 'file-saver';
 
 // --- Types ---
@@ -983,7 +983,7 @@ export default function App() {
                 }),
               ],
               alignment: AlignmentType.CENTER,
-              bidi: true,
+              bidirectional: true,
             }),
           ],
           shading: isHeader ? { fill: "4f46e5" } : undefined,
@@ -1027,6 +1027,7 @@ export default function App() {
           new Table({
             rows: docRows,
             width: { size: 100, type: WidthType.PERCENTAGE },
+            layout: TableLayoutType.AUTOFIT,
           }),
         ],
       }],
