@@ -983,11 +983,11 @@ export default function App() {
                 }),
               ],
               alignment: AlignmentType.CENTER,
+              bidi: true,
             }),
           ],
           shading: isHeader ? { fill: "4f46e5" } : undefined,
           margins: { top: 100, bottom: 100, left: 100, right: 100 },
-          width: { size: 100 / (cells.length - (actionIndex !== -1 ? 1 : 0)), type: WidthType.PERCENTAGE },
         }));
       });
 
