@@ -3,8 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import Barcode from 'react-barcode';
 import { supabase } from '@/lib/supabaseClient';
-import { asBlob } from 'html-docx-js-typescript';
-import { saveAs } from 'file-saver';
 
 // --- Types ---
 type Product = {
@@ -969,12 +967,21 @@ export default function App() {
       input.parentNode?.replaceChild(val, input);
     });
 
-    const htmlString = `<!DOCTYPE html>
-<html>
+    const htmlString = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="UTF-8">
   <title>${filename}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
   <style>
+    @page { size: 21cm 29.7cm; margin: 1cm; mso-page-orientation: portrait; }
     body { font-family: 'Arial', sans-serif; direction: rtl; text-align: right; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; direction: rtl; }
     th, td { border: 1px solid #000; padding: 10px; text-align: center; }
@@ -988,12 +995,15 @@ export default function App() {
 </body>
 </html>`;
 
-    try {
-      const blob = await asBlob(htmlString, { orientation: 'portrait', margins: { top: 720, right: 720, bottom: 720, left: 720 } }) as Blob;
-      saveAs(blob, `${filename}_${new Date().toISOString().split('T')[0]}.docx`);
-    } catch(err) {
-      console.error("Export error: ", err);
-    }
+    const blob = new Blob(['\ufeff', htmlString], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleBackup = async () => {
