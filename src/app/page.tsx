@@ -942,6 +942,31 @@ export default function App() {
     
     const clone = table.cloneNode(true) as HTMLTableElement;
     
+    // Remove "Actions" (إجراءات) column if it exists
+    const ths = clone.querySelectorAll('th');
+    let actionIndex = -1;
+    ths.forEach((th, index) => {
+      if (th.innerText.includes('إجراء')) {
+        actionIndex = index;
+      }
+    });
+
+    if (actionIndex !== -1) {
+      const rows = clone.querySelectorAll('tr');
+      rows.forEach(row => {
+        if (row.children.length > actionIndex) {
+          row.removeChild(row.children[actionIndex]);
+        }
+      });
+    }
+
+    // Clean up input fields in table (if any) and replace with their values
+    const inputs = clone.querySelectorAll('input');
+    inputs.forEach(input => {
+      const val = document.createTextNode(input.value || '');
+      input.parentNode?.replaceChild(val, input);
+    });
+    
     const html = `
       <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
       <head>
@@ -949,13 +974,14 @@ export default function App() {
         <title>${filename}</title>
         <style>
           body { font-family: 'Arial', sans-serif; direction: rtl; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-          th { background-color: #f2f2f2; font-weight: bold; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
+          th, td { border: 1px solid #000; padding: 10px; text-align: center; }
+          th { background-color: #4f46e5; color: white; font-weight: bold; }
         </style>
       </head>
       <body>
-        <h2 style="text-align:center">${filename}</h2>
+        <h2 style="text-align:center; color: #333;">${filename}</h2>
+        <p style="text-align:center; color: #666;">تاريخ التصدير: ${new Date().toLocaleDateString('ar-IQ')}</p>
         ${clone.outerHTML}
       </body>
       </html>
