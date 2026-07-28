@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import Barcode from 'react-barcode';
 import { supabase } from '@/lib/supabaseClient';
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType, AlignmentType, TextRun } from 'docx';
+import { saveAs } from 'file-saver';
 
 // --- Types ---
 type Product = {
@@ -937,13 +939,11 @@ export default function App() {
 
 
   const exportTableToWord = (tableId: string, filename: string) => {
-    const table = document.getElementById(tableId);
+    const table = document.getElementById(tableId) as HTMLTableElement;
     if (!table) return;
-    
-    const clone = table.cloneNode(true) as HTMLTableElement;
-    
-    // Remove "Actions" (إجراءات) column if it exists
-    const ths = clone.querySelectorAll('th');
+
+    // Find if there is an "Actions" column
+    const ths = Array.from(table.querySelectorAll('th'));
     let actionIndex = -1;
     ths.forEach((th, index) => {
       if (th.innerText.includes('إجراء')) {
@@ -951,54 +951,90 @@ export default function App() {
       }
     });
 
-    if (actionIndex !== -1) {
-      const rows = clone.querySelectorAll('tr');
-      rows.forEach(row => {
-        if (row.children.length > actionIndex) {
-          row.removeChild(row.children[actionIndex]);
-        }
-      });
-    }
+    // Create the rows for docx
+    const docRows: TableRow[] = [];
+    const htmlRows = Array.from(table.querySelectorAll('tr'));
 
-    // Clean up input fields in table (if any) and replace with their values
-    const inputs = clone.querySelectorAll('input');
-    inputs.forEach(input => {
-      const val = document.createTextNode(input.value || '');
-      input.parentNode?.replaceChild(val, input);
+    htmlRows.forEach((row, rowIndex) => {
+      const isHeader = rowIndex === 0 || row.querySelector('th') !== null;
+      const cells = Array.from(row.querySelectorAll('th, td'));
+      
+      const docCells: TableCell[] = [];
+      cells.forEach((cell, cellIndex) => {
+        if (cellIndex === actionIndex) return; // Skip action column
+
+        let cellText = (cell as HTMLElement).innerText || '';
+        
+        // If there's an input field, get its value instead
+        const input = cell.querySelector('input');
+        if (input) {
+          cellText = input.value;
+        }
+
+        docCells.push(new TableCell({
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: cellText,
+                  bold: isHeader,
+                  rightToLeft: true,
+                  color: isHeader ? "FFFFFF" : "000000",
+                }),
+              ],
+              alignment: AlignmentType.CENTER,
+            }),
+          ],
+          shading: isHeader ? { fill: "4f46e5" } : undefined,
+          margins: { top: 100, bottom: 100, left: 100, right: 100 },
+          width: { size: 100 / (cells.length - (actionIndex !== -1 ? 1 : 0)), type: WidthType.PERCENTAGE },
+        }));
+      });
+
+      if (docCells.length > 0) {
+        docRows.push(new TableRow({ children: docCells }));
+      }
     });
-    
-    const html = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-        <meta charset="utf-8">
-        <title>${filename}</title>
-        <style>
-          body { font-family: 'Arial', sans-serif; direction: rtl; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
-          th, td { border: 1px solid #000; padding: 10px; text-align: center; }
-          th { background-color: #4f46e5; color: white; font-weight: bold; }
-        </style>
-      </head>
-      <body>
-        <h2 style="text-align:center; color: #333;">${filename}</h2>
-        <p style="text-align:center; color: #666;">تاريخ التصدير: ${new Date().toLocaleDateString('ar-IQ')}</p>
-        ${clone.outerHTML}
-      </body>
-      </html>
-    `;
-    
-    const blob = new Blob(['\ufeff', html], {
-      type: 'application/msword'
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: filename,
+                bold: true,
+                size: 32,
+                rightToLeft: true,
+              }),
+            ],
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `تاريخ التصدير: ${new Date().toLocaleDateString('ar-IQ')}`,
+                size: 24,
+                color: "666666",
+                rightToLeft: true,
+              }),
+            ],
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 400 },
+          }),
+          new Table({
+            rows: docRows,
+            width: { size: 100, type: WidthType.PERCENTAGE },
+          }),
+        ],
+      }],
     });
-    
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.doc`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+
+    Packer.toBlob(doc).then(blob => {
+      saveAs(blob, `${filename}_${new Date().toISOString().split('T')[0]}.docx`);
+    });
   };
 
   const handleBackup = async () => {
