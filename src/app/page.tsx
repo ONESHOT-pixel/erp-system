@@ -936,62 +936,72 @@ export default function App() {
   };
 
 
-  const exportTableToWord = async (tableId: string, filename: string) => {
+  const exportTableToWord = (tableId: string, filename: string) => {
     const table = document.getElementById(tableId) as HTMLTableElement;
     if (!table) return;
-    
-    const clone = table.cloneNode(true) as HTMLTableElement;
-    
-    // Remove "Actions" (إجراءات) column if it exists
-    const ths = clone.querySelectorAll('th');
-    let actionIndex = -1;
-    ths.forEach((th, index) => {
-      if (th.innerText.includes('إجراء')) {
-        actionIndex = index;
-      }
-    });
 
-    if (actionIndex !== -1) {
-      const rows = clone.querySelectorAll('tr');
-      rows.forEach(row => {
-        if (row.children.length > actionIndex) {
-          row.removeChild(row.children[actionIndex]);
+    // Build a clean table from the data - no web CSS classes
+    const rows = Array.from(table.querySelectorAll('tr'));
+    let cleanRows = '';
+
+    rows.forEach((row) => {
+      const isHeaderRow = row.querySelector('th') !== null;
+      const cells = Array.from(row.querySelectorAll('th, td'));
+      let cleanCells = '';
+      let skipRow = false;
+
+      cells.forEach((cell) => {
+        const text = (cell as HTMLElement).innerText.trim();
+        // Skip the "إجراءات" column
+        if (text === 'إجراءات' || text.includes('إجراءات')) {
+          return; // skip this cell
+        }
+        // Skip cells that contain only icon buttons (edit/delete)
+        if (cell.querySelector('.btn-icon, .btn-edit, .btn-delete, .action-btns')) {
+          return;
+        }
+
+        if (isHeaderRow) {
+          cleanCells += `<th style="border:1px solid #000;padding:8px;text-align:center;background:#4f46e5;color:white;font-weight:bold;">${text}</th>`;
+        } else {
+          cleanCells += `<td style="border:1px solid #000;padding:8px;text-align:center;">${text}</td>`;
         }
       });
-    }
 
-    // Clean up input fields in table (if any) and replace with their values
-    const inputs = clone.querySelectorAll('input');
-    inputs.forEach(input => {
-      const val = document.createTextNode(input.value || '');
-      input.parentNode?.replaceChild(val, input);
+      if (cleanCells) {
+        cleanRows += `<tr>${cleanCells}</tr>\n`;
+      }
     });
 
     const htmlString = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
-  <meta charset="UTF-8">
-  <title>${filename}</title>
-  <!--[if gte mso 9]>
-  <xml>
-    <w:WordDocument>
-      <w:View>Print</w:View>
-      <w:Zoom>100</w:Zoom>
-      <w:DoNotOptimizeForBrowser/>
-    </w:WordDocument>
-  </xml>
-  <![endif]-->
-  <style>
-    @page { size: 21cm 29.7cm; margin: 1cm; mso-page-orientation: portrait; }
-    body { font-family: 'Arial', sans-serif; direction: rtl; text-align: right; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; direction: rtl; }
-    th, td { border: 1px solid #000; padding: 10px; text-align: center; }
-    th { background-color: #4f46e5; color: white; font-weight: bold; }
-  </style>
+<meta charset="UTF-8">
+<title>${filename}</title>
+<!--[if gte mso 9]>
+<xml>
+<w:WordDocument>
+<w:View>Print</w:View>
+<w:Zoom>100</w:Zoom>
+<w:DoNotOptimizeForBrowser/>
+</w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+@page { size: 21cm 29.7cm; margin: 2cm; }
+body { font-family: Arial, sans-serif; direction: rtl; }
+table { width: 100%; border-collapse: collapse; direction: rtl; }
+th { border: 1px solid #000; padding: 8px; text-align: center; background: #4f46e5; color: white; font-weight: bold; }
+td { border: 1px solid #000; padding: 8px; text-align: center; }
+h2 { text-align: center; }
+p { text-align: center; color: #666; }
+</style>
 </head>
 <body>
-  <h2 style="text-align:center; color: #333;">${filename}</h2>
-  <p style="text-align:center; color: #666;">تاريخ التصدير: ${new Date().toLocaleDateString('ar-IQ')}</p>
-  ${clone.outerHTML}
+<h2>${filename}</h2>
+<p>تاريخ التصدير: ${new Date().toLocaleDateString('ar-IQ')}</p>
+<table>
+${cleanRows}
+</table>
 </body>
 </html>`;
 
