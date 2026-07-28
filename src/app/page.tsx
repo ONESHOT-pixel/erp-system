@@ -245,18 +245,109 @@ export default function App() {
   const EXCHANGE_RATE = 1520; // 1 USD = 1520 IQD
 
   // --- Inventory State ---
-  const [categories, setCategories] = useState<string[]>(['إلكترونيات', 'إكسسوارات', 'شاشات']);
+
   const [newCategory, setNewCategory] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   
+  const [categories, setCategories] = useState<string[]>(['إلكترونيات', 'إكسسوارات', 'شاشات']);
+
+  // Load Categories from Supabase (with fallback)
+  const fetchCategories = async () => {
+    const { data, error } = await supabase.from('categories').select('name');
+    
+    let baseCategories = ['إلكترونيات', 'إكسسوارات', 'شاشات'];
+    if (data && !error) {
+      baseCategories = data.map(d => d.name);
+    } else {
+      const saved = localStorage.getItem('pos_categories');
+      if (saved) baseCategories = JSON.parse(saved);
+    }
+    
+    // Merge with any categories existing in products
+    const productCategories = products.map(p => p.category).filter(Boolean);
+    const allCategories = Array.from(new Set([...baseCategories, ...productCategories]));
+    
+    if (JSON.stringify(categories) !== JSON.stringify(allCategories)) {
+      setCategories(allCategories);
+      localStorage.setItem('pos_categories', JSON.stringify(allCategories));
+    }
+  };
+
+  useEffect(() => {
+    fetchCategories();
+  }, [products]);
+  
   useEffect(() => {
     fetchProducts();
+    fetchPurchases();
+    fetchSales();
+    fetchExpenses();
+    fetchMaintenance();
+    fetchDamages();
+    fetchProductions();
   }, []);
 
   const fetchProducts = async () => {
     const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
-    if (data) setProducts(data);
+    if (data) {
+      const mapped = data.map(d => ({
+        ...d,
+        id: d.id.toString(),
+        lowStockAlert: d.lowstockalert !== undefined ? d.lowstockalert : d.lowStockAlert,
+        costPrice: d.costprice !== undefined ? d.costprice : d.costPrice
+      }));
+      setProducts(mapped);
+    }
+  };
+
+  const fetchPurchases = async () => {
+    const { data } = await supabase.from('purchases').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), invoiceNumber: d.invoice_number, supplierName: d.supplier_name, date: d.date, items: d.items || [],
+        totalAmount: d.total_amount, paidAmount: d.deposit, paymentStatus: d.payment_status, dueDate: d.due_date || '', notes: d.notes, payments: d.payments || []
+      }));
+      setPurchases(mapped);
+    }
+  };
+
+  const fetchSales = async () => {
+    const { data } = await supabase.from('sales_invoices').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), invoiceNumber: d.invoice_number, customerName: d.customer_name, date: d.date, items: d.items || [],
+        totalAmount: d.total_amount, paidAmount: d.deposit, paymentStatus: d.payment_status, dueDate: d.due_date || '', payments: d.payments || [], subtotal: d.total_amount, discount: 0
+      }));
+      setSalesInvoices(mapped);
+    }
+  };
+
+  const fetchExpenses = async () => {
+    const { data } = await supabase.from('expenses').select('*').order('id', { ascending: false });
+    if (data) setExpenses(data.map(d => ({ ...d, id: d.id.toString() })));
+  };
+
+  const fetchMaintenance = async () => {
+    const { data } = await supabase.from('maintenance_tickets').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), ticketNumber: `MN-${d.id}`, customerName: d.customer_name, customerPhone: d.phone, deviceType: d.device_type, issueDescription: d.issue_description,
+        status: d.status, estimatedCost: d.cost || 0, receiveDate: d.date, notes: d.notes, deviceModel: d.device_model,
+        usedParts: d.used_parts || [], deposit: d.deposit || 0, warrantyPeriod: d.warranty_period || ''
+      }));
+      setMaintenanceTickets(mapped);
+    }
+  };
+
+  const fetchDamages = async () => {
+    const { data } = await supabase.from('damages').select('*').order('id', { ascending: false });
+    if (data) setDamages(data.map(d => ({ id: d.id.toString(), itemId: d.item_id, itemName: d.item_name, quantity: d.quantity, costPrice: d.cost_price, totalLoss: d.total_loss, reason: d.reason, date: d.date })));
+  };
+
+  const fetchProductions = async () => {
+    const { data } = await supabase.from('productions').select('*').order('id', { ascending: false });
+    if (data) setProductions(data.map(d => ({ id: d.id.toString(), producedItemId: d.produced_item_id, producedItemName: d.produced_item_name, quantityProduced: d.quantity_produced, totalCost: d.estimated_cost, components: d.components || [], date: d.date })));
   };
 
   const [isInvModalOpen, setIsInvModalOpen] = useState(false);
@@ -265,13 +356,7 @@ export default function App() {
   const [invFormData, setInvFormData] = useState<Product>({ id: '', barcode: '', name: '', category: '', quantity: 0, lowStockAlert: 5, costPrice: 0, price: 0 });
 
   // --- Purchasing State ---
-  const [purchases, setPurchases] = useState<PurchaseInvoice[]>([
-    { 
-      id: '1', invoiceNumber: 'PUR-1001', supplierName: 'شركة التقنية الحديثة', date: '2026-07-28', 
-      items: [{ id: 'i1', productId: '1', name: 'لابتوب Asus ROG', quantity: 5, costPrice: 900000, total: 4500000 }],
-      totalAmount: 4500000, paidAmount: 4500000, paymentStatus: 'paid', notes: '' 
-    },
-  ]);
+  const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
   const [isPurModalOpen, setIsPurModalOpen] = useState(false);
   const [purModalType, setPurModalType] = useState<'add' | 'edit'>('add');
   const [purEditingId, setPurEditingId] = useState<string | null>(null);
@@ -288,6 +373,8 @@ export default function App() {
   const [salesDueDate, setSalesDueDate] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('زبون نقدي');
   const [activePosCategory, setActivePosCategory] = useState<string>('الكل');
+  const [isCatDropdownOpen, setIsCatDropdownOpen] = useState(false);
+  const [catSearch, setCatSearch] = useState('');
   const [searchPos, setSearchPos] = useState('');
   const [salesInvoices, setSalesInvoices] = useState<SalesInvoice[]>([]);
   const [isDailyStatsOpen, setIsDailyStatsOpen] = useState(false);
@@ -349,46 +436,72 @@ export default function App() {
   const closeInvModal = () => setIsInvModalOpen(false);
   const generateBarcode = () => setInvFormData({ ...invFormData, barcode: Math.floor(1000000000 + Math.random() * 9000000000).toString() });
   
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
     if (newCategory.trim() !== '' && !categories.includes(newCategory)) {
-      setCategories([...categories, newCategory]);
+      const updated = [...categories, newCategory];
+      setCategories(updated);
       setInvFormData({ ...invFormData, category: newCategory });
+      
+      // Attempt to save to Supabase
+      const { error } = await supabase.from('categories').insert([{ name: newCategory }]);
+      if (error) {
+        // Fallback if table doesn't exist yet
+        localStorage.setItem('pos_categories', JSON.stringify(updated));
+      } else {
+        localStorage.setItem('pos_categories', JSON.stringify(updated));
+      }
     }
     setNewCategory('');
     setShowAddCategory(false);
   };
 
-  const handleDeleteCategory = () => {
+  const handleDeleteCategory = async () => {
     if (categories.length <= 1) {
-      setErrorModal({ isOpen: true, message: 'لا يمكن حذف جميع التصنيفات. يجب أن يبقى تصنيف واحد على الأقل.' });
+      setErrorModal({ isOpen: true, message: 'لا يمكن حذف التصنيف الأخير. يجب أن يتبقى تصنيف واحد على الأقل.' });
       return;
     }
-    const updatedCategories = categories.filter(c => c !== invFormData.category);
+    const hasProducts = products.some(p => p.category === invFormData.category);
+    if (hasProducts) {
+      setErrorModal({ isOpen: true, message: 'لا يمكن حذف هذا التصنيف لوجود مواد مرتبطة به. يرجى حذف أو تعديل المواد أولاً.' });
+      return;
+    }
+    const categoryToDelete = invFormData.category;
+    const updatedCategories = categories.filter(c => c !== categoryToDelete);
+    
+    // Update local state first for speed
     setCategories(updatedCategories);
     setInvFormData({ ...invFormData, category: updatedCategories[0] });
+    
+    // Attempt to delete from Supabase
+    const { error } = await supabase.from('categories').delete().eq('name', categoryToDelete);
+    if (error) {
+      localStorage.setItem('pos_categories', JSON.stringify(updatedCategories));
+    } else {
+      localStorage.setItem('pos_categories', JSON.stringify(updatedCategories));
+    }
   };
 
   const handleSaveInvModal = async () => {
-    if (!invFormData.name || !invFormData.category) return alert('يرجى ملء الحقول المطلوبة!');
+    if (!invFormData.name || !invFormData.category) return setErrorModal({ isOpen: true, message: 'يرجى ملء الحقول المطلوبة!' });
     const finalBarcode = invFormData.barcode || Math.floor(1000000000 + Math.random() * 9000000000).toString();
     const finalProduct = {
       barcode: finalBarcode,
       name: invFormData.name,
       category: invFormData.category,
       quantity: invFormData.quantity,
-      lowStockAlert: invFormData.lowStockAlert,
-      costPrice: invFormData.costPrice,
+      lowstockalert: invFormData.lowStockAlert,
+      costprice: invFormData.costPrice,
       price: invFormData.price
     };
     
     if (invModalType === 'add') {
       const { data, error } = await supabase.from('products').insert([finalProduct]).select();
       if (data && data.length > 0) setProducts([data[0], ...products]);
-      if (error) alert('Error: ' + error.message);
+      if (error) setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
     } else {
       const { data, error } = await supabase.from('products').update(finalProduct).eq('id', invEditingId).select();
       if (data && data.length > 0) setProducts(products.map(p => p.id === invEditingId ? data[0] : p));
-      if (error) alert('Error: ' + error.message);
+      if (error) setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
     }
     closeInvModal();
   };
@@ -404,14 +517,19 @@ export default function App() {
       const invoiceToDelete = purchases.find(p => p.id === deleteConfirm.id);
       if (invoiceToDelete) {
         let updatedProducts = [...products];
-        invoiceToDelete.items.forEach(oldItem => {
+        for (const oldItem of invoiceToDelete.items) {
           updatedProducts = updatedProducts.map(p => {
-            if (p.id === oldItem.productId) return { ...p, quantity: Math.max(0, p.quantity - oldItem.quantity) };
+            if (p.id === oldItem.productId) {
+               const newQty = Math.max(0, p.quantity - oldItem.quantity);
+               supabase.from('products').update({ quantity: newQty }).eq('id', p.id).then();
+               return { ...p, quantity: newQty };
+            }
             return p;
           });
-        });
+        }
         setProducts(updatedProducts);
       }
+      await supabase.from('purchases').delete().eq('id', deleteConfirm.id);
       setPurchases(purchases.filter(p => p.id !== deleteConfirm.id));
     }
     setDeleteConfirm({ isOpen: false, id: '', type: 'inventory', title: '' });
@@ -434,7 +552,7 @@ export default function App() {
   const closePurModal = () => setIsPurModalOpen(false);
   
   const addPurItemToInvoice = () => {
-    if (!currentPurItem.name.trim() || currentPurItem.quantity <= 0 || currentPurItem.costPrice <= 0) return alert('يرجى كتابة اسم المادة وإدخال الكمية وسعر الشراء!');
+    if (!currentPurItem.name.trim() || currentPurItem.quantity <= 0 || currentPurItem.costPrice <= 0) return setErrorModal({ isOpen: true, message: 'يرجى تحديد اسم المادة والكمية وسعر التكلفة بشكل صحيح!' });
     const existingProduct = products.find(p => p.name === currentPurItem.name.trim());
     const itemProductId = existingProduct ? existingProduct.id : `NEW_${Date.now()}`;
     const newItem: PurchaseItem = { id: Date.now().toString(), productId: itemProductId, name: currentPurItem.name.trim(), quantity: currentPurItem.quantity, costPrice: currentPurItem.costPrice, total: currentPurItem.quantity * currentPurItem.costPrice };
@@ -447,7 +565,7 @@ export default function App() {
     setPurFormData({ ...purFormData, items: newItems, totalAmount: newItems.reduce((acc, item) => acc + item.total, 0) });
   };
   const handleSavePayment = () => {
-    if (paymentModal.amount <= 0) return alert('يرجى إدخال مبلغ صالح.');
+    if (paymentModal.amount <= 0) return setErrorModal({ isOpen: true, message: 'يرجى إدخال مبلغ صحيح.' });
     const newPayment: PaymentRecord = {
       id: Date.now().toString(),
       date: paymentModal.date,
@@ -483,8 +601,8 @@ export default function App() {
   };
 
   const handlePurSave = () => {
-    if (!purFormData.supplierName) return alert('يرجى كتابة اسم المورد!');
-    if (purFormData.items.length === 0) return alert('يرجى إضافة مواد للفاتورة!');
+    if (!purFormData.supplierName) return setErrorModal({ isOpen: true, message: 'يرجى إدخال اسم المورد!' });
+    if (purFormData.items.length === 0) return setErrorModal({ isOpen: true, message: 'يرجى إضافة مواد للفاتورة!' });
     let updatedProducts = [...products];
     if (purModalType === 'edit' && purEditingId) {
       const oldInvoice = purchases.find(p => p.id === purEditingId);
@@ -532,11 +650,11 @@ export default function App() {
   });
 
   const addToCart = (product: Product) => {
-    if (product.quantity <= 0) return alert('هذه المادة نافذة من المخزن!');
+    if (product.quantity <= 0) return setErrorModal({ isOpen: true, message: 'هذه المادة نفدت من المخزن!' });
     
     const existingItem = cart.find(item => item.id === product.id);
     if (existingItem) {
-      if (existingItem.cartQuantity >= product.quantity) return alert('لا توجد كمية كافية في المخزن!');
+      if (existingItem.cartQuantity >= product.quantity) return setErrorModal({ isOpen: true, message: 'لا يمكن إضافة كمية أكبر من المتوفر!' });
       setCart(cart.map(item => item.id === product.id ? { ...item, cartQuantity: item.cartQuantity + 1, total: (item.cartQuantity + 1) * item.price } : item));
     } else {
       setCart([...cart, { ...product, cartQuantity: 1, total: product.price }]);
@@ -551,7 +669,7 @@ export default function App() {
     if (newQty <= 0) {
       setCart(cart.filter(i => i.id !== productId));
     } else {
-      if (newQty > item.quantity) return alert('الكمية المطلوبة تتجاوز المخزون!');
+      if (newQty > item.quantity) return setErrorModal({ isOpen: true, message: 'الكمية المطلوبة تتجاوز المتوفر!' });
       setCart(cart.map(i => i.id === productId ? { ...i, cartQuantity: newQty, total: newQty * i.price } : i));
     }
   };
@@ -559,7 +677,7 @@ export default function App() {
   const cartSubtotal = cart.reduce((acc, item) => acc + item.total, 0);
   const cartGrandTotal = Math.max(0, cartSubtotal - discount);
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0) {
       setErrorModal({ isOpen: true, message: 'لا يمكن إتمام العملية. السلة فارغة، يرجى إضافة مواد أولاً!' });
       return;
@@ -584,6 +702,10 @@ export default function App() {
       paymentStatus: salesPaymentStatus,
       payments: (salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount) > 0 ? [{ id: Date.now().toString() + '1', date: getTodayDate(), amount: salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount, note: 'دفعة أولية' }] : []
     };
+    
+    const dbInvoice = { invoice_number: newInvoice.invoiceNumber, customer_name: newInvoice.customerName, date: newInvoice.date, total_amount: newInvoice.totalAmount, paid_amount: newInvoice.paidAmount, payment_status: newInvoice.paymentStatus, due_date: newInvoice.dueDate, items: newInvoice.items, payments: newInvoice.payments };
+    const { data } = await supabase.from('sales_invoices').insert([dbInvoice]).select();
+    if (data && data.length > 0) newInvoice.id = data[0].id.toString();
 
     setSalesInvoices([newInvoice, ...salesInvoices]);
 
@@ -611,7 +733,7 @@ export default function App() {
 
 
   // --- Production & Damages Logic ---
-  const handleSaveDamage = () => {
+  const handleSaveDamage = async () => {
     if (!damageFormData.itemId || damageFormData.quantity <= 0) return setErrorModal({ isOpen: true, message: 'يرجى تحديد المادة التالفة والكمية بشكل صحيح!' });
     const product = products.find(p => p.id === damageFormData.itemId);
     if (!product || product.quantity < damageFormData.quantity) return setErrorModal({ isOpen: true, message: 'الكمية التالفة أكبر من الكمية المتوفرة في المخزن!' });
@@ -631,6 +753,9 @@ export default function App() {
       reason: damageFormData.reason,
       date: getTodayDate()
     };
+    const dbDamage = { item_id: newDamage.itemId, item_name: newDamage.itemName, quantity: newDamage.quantity, cost_price: newDamage.costPrice, total_loss: newDamage.totalLoss, reason: newDamage.reason, date: newDamage.date };
+    const { data } = await supabase.from('damages').insert([dbDamage]).select();
+    if (data && data.length > 0) newDamage.id = data[0].id.toString();
     setDamages([newDamage, ...damages]);
     setIsDamageModalOpen(false);
   };
@@ -653,7 +778,7 @@ export default function App() {
     });
   };
 
-  const handleSaveProduction = () => {
+  const handleSaveProduction = async () => {
     if (!productionFormData.producedItemName || productionFormData.quantityProduced <= 0) return setErrorModal({ isOpen: true, message: 'يرجى إدخال اسم المنتج النهائي والكمية!' });
     if (productionFormData.components.length === 0) return setErrorModal({ isOpen: true, message: 'يجب إضافة مواد أولية لتصنيع هذا المنتج!' });
 
@@ -712,6 +837,9 @@ export default function App() {
       components: productionFormData.components,
       date: getTodayDate()
     };
+    const dbProd = { produced_item_id: newProduction.producedItemId, produced_item_name: newProduction.producedItemName, quantity_produced: newProduction.quantityProduced, total_cost: newProduction.totalCost, components: newProduction.components, date: newProduction.date };
+    const { data } = await supabase.from('productions').insert([dbProd]).select();
+    if (data && data.length > 0) newProduction.id = data[0].id.toString();
     setProductions([newProduction, ...productions]);
     setIsProductionModalOpen(false);
   };
@@ -749,7 +877,7 @@ export default function App() {
     });
   };
 
-  const handleSaveMaintenanceTicket = () => {
+  const handleSaveMaintenanceTicket = async () => {
     if (!maintenanceFormData.customerName || !maintenanceFormData.deviceType) return setErrorModal({ isOpen: true, message: 'يرجى إدخال اسم الزبون ونوع الجهاز!' });
 
     let updatedProducts = [...products];
@@ -778,7 +906,7 @@ export default function App() {
     setIsMaintenanceModalOpen(false);
   };
 
-  const deliverMaintenanceTicket = (ticket: MaintenanceTicket) => {
+  const deliverMaintenanceTicket = async (ticket: MaintenanceTicket) => {
     if (ticket.status === 'completed' || ticket.status === 'rejected') return;
     
     const updatedTicket = { ...ticket, status: 'completed' as MaintenanceStatus, deliveryDate: getTodayDate() };
@@ -800,10 +928,75 @@ export default function App() {
         paidAmount: remainingAmount,
         paymentStatus: 'paid'
       };
+      const dbInvoice = { invoice_number: newInvoice.invoiceNumber, customer_name: newInvoice.customerName, date: newInvoice.date, total_amount: newInvoice.totalAmount, paid_amount: newInvoice.paidAmount, payment_status: newInvoice.paymentStatus, due_date: newInvoice.dueDate, items: newInvoice.items, payments: [] };
+      const { data } = await supabase.from('sales_invoices').insert([dbInvoice]).select();
+      if (data && data.length > 0) newInvoice.id = data[0].id.toString();
       setSalesInvoices([newInvoice, ...salesInvoices]);
     }
   };
 
+
+  const exportTableToWord = (tableId: string, filename: string) => {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    
+    const clone = table.cloneNode(true) as HTMLTableElement;
+    
+    const html = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta charset="utf-8">
+        <title>${filename}</title>
+        <style>
+          body { font-family: 'Arial', sans-serif; direction: rtl; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+          th { background-color: #f2f2f2; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h2 style="text-align:center">${filename}</h2>
+        ${clone.outerHTML}
+      </body>
+      </html>
+    `;
+    
+    const blob = new Blob(['\ufeff', html], {
+      type: 'application/msword'
+    });
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleBackup = async () => {
+    try {
+      const backupData: any = {};
+      const tables = ['categories', 'products', 'sales_invoices', 'purchases', 'expenses', 'maintenance_tickets', 'damages', 'productions'];
+      for (const table of tables) {
+        const { data } = await supabase.from(table).select('*');
+        backupData[table] = data || [];
+      }
+      
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `erp_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErrorModal({ isOpen: true, message: 'حدث خطأ أثناء أخذ النسخة الاحتياطية.' });
+    }
+  };
 
   return (
     <div className="app-container">
@@ -867,14 +1060,16 @@ export default function App() {
               {/* Left Side: Product Selection */}
               <div className="pos-products">
                 {/* Search & Categories */}
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <div style={{ flex: 1, position: 'relative' }}>
-                    <i className="fa-solid fa-barcode" style={{ position: 'absolute', right: '12px', top: '12px', color: '#94a3b8' }}></i>
+
+                
+                {/* Search & Categories Container */}
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                  <div className="pos-search-wrapper" style={{ flex: 1, marginBottom: 0 }}>
+                    <i className="fa-solid fa-barcode pos-search-icon"></i>
                     <input 
                       type="text" 
-                      className="glass-input" 
-                      placeholder="ابحث بالاسم أو الباركود... (جاهز لقارئ الباركود)" 
-                      style={{ paddingRight: '36px', width: '100%' }}
+                      className="pos-search-input" 
+                      placeholder="ابحث بالاسم أو الباركود... (القارئ جاهز)" 
                       value={searchPos}
                       onChange={(e) => setSearchPos(e.target.value)}
                       onKeyDown={(e) => {
@@ -889,28 +1084,67 @@ export default function App() {
                       autoFocus
                     />
                   </div>
+
+                  {/* Dropdown Filter */}
+                  <div className="pos-filter-dropdown">
+                    <button className="pos-filter-btn" onClick={() => setIsCatDropdownOpen(!isCatDropdownOpen)}>
+                      <i className="fa-solid fa-filter"></i> 
+                      {activePosCategory === 'الكل' ? 'التصنيفات' : activePosCategory}
+                      <i className={`fa-solid fa-chevron-${isCatDropdownOpen ? 'up' : 'down'}`} style={{ fontSize: '12px', opacity: 0.7 }}></i>
+                    </button>
+                    
+                    {isCatDropdownOpen && (
+                      <div className="pos-filter-menu">
+                        <input 
+                          type="text" 
+                          className="pos-filter-search" 
+                          placeholder="ابحث عن تصنيف..." 
+                          value={catSearch}
+                          onChange={(e) => setCatSearch(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div 
+                          className={`pos-filter-item ${activePosCategory === 'الكل' ? 'active' : ''}`}
+                          onClick={() => { setActivePosCategory('الكل'); setIsCatDropdownOpen(false); setCatSearch(''); }}
+                        >
+                          <i className="fa-solid fa-layer-group"></i> الكل
+                        </div>
+                        {categories.filter(c => c.toLowerCase().includes(catSearch.toLowerCase())).map(cat => (
+                          <div 
+                            key={cat} 
+                            className={`pos-filter-item ${activePosCategory === cat ? 'active' : ''}`}
+                            onClick={() => { setActivePosCategory(cat); setIsCatDropdownOpen(false); setCatSearch(''); }}
+                          >
+                            <i className="fa-solid fa-tag"></i> {cat}
+                          </div>
+                        ))}
+                        {categories.filter(c => c.toLowerCase().includes(catSearch.toLowerCase())).length === 0 && (
+                          <div style={{ padding: '12px', textAlign: 'center', color: '#94a3b8', fontSize: '14px' }}>لا يوجد تصنيف مطابق</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 
-                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px' }}>
-                  <button className={`cat-btn ${activePosCategory === 'الكل' ? 'active' : ''}`} onClick={() => setActivePosCategory('الكل')}>الكل</button>
-                  {categories.map(cat => (
-                    <button key={cat} className={`cat-btn ${activePosCategory === cat ? 'active' : ''}`} onClick={() => setActivePosCategory(cat)}>{cat}</button>
-                  ))}
-                </div>
+                {/* Close Dropdown when clicking outside (overlay trick) */}
+                {isCatDropdownOpen && (
+                  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} onClick={() => setIsCatDropdownOpen(false)}></div>
+                )}
+                
 
                 {/* Product Grid */}
-                <div className="product-grid">
+                <div className="pos-product-grid">
                   {filteredPosProducts.map(p => (
-                    <div key={p.id} className={`product-card ${p.quantity === 0 ? 'disabled' : ''}`} onClick={() => addToCart(p)}>
-                      <div style={{ fontSize: '24px', color: 'var(--primary-color)', marginBottom: '4px' }}>
-                        <i className="fa-solid fa-box"></i>
+                    <div key={p.id} className={`pos-product-card ${p.quantity === 0 ? 'disabled' : ''}`} onClick={() => addToCart(p)}>
+                      <div style={{ fontSize: '32px', color: 'var(--primary-color)', marginBottom: '8px' }}>
+                        <i className="fa-solid fa-box-open"></i>
                       </div>
-                      <span style={{ fontWeight: 'bold', fontSize: '14px', lineHeight: '1.2' }}>{p.name}</span>
-                      <span style={{ color: 'var(--success-color)', fontWeight: 'bold', fontSize: '15px' }}>{p.price.toLocaleString()} د.ع</span>
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>المتوفر: {p.quantity}</span>
+                      <span style={{ fontWeight: '700', fontSize: '15px', lineHeight: '1.3' }}>{p.name}</span>
+                      <span style={{ color: '#4ade80', fontWeight: '800', fontSize: '18px' }}>{p.price.toLocaleString()} د.ع</span>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '8px', display: 'inline-block', margin: '0 auto' }}>المتوفر: {p.quantity}</span>
                     </div>
                   ))}
-                  {filteredPosProducts.length === 0 && <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '40px', color: '#94a3b8' }}>لا توجد مواد مطابقة للبحث.</div>}
+                  {filteredPosProducts.length === 0 && <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '60px', color: '#94a3b8', fontSize: '18px' }}><i className="fa-solid fa-ghost" style={{fontSize:'40px', marginBottom:'16px', display:'block', opacity:0.5}}></i> لا توجد مواد مطابقة للبحث.</div>}
                 </div>
               </div>
 
@@ -1037,6 +1271,7 @@ export default function App() {
             <header className="header">
               <h1 className="header-title">إدارة المخازن</h1>
               <div className="header-actions">
+                <button className="btn btn-secondary" onClick={() => exportTableToWord('inventory-table', 'المخازن')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button>
                 <button className="btn btn-primary" onClick={() => openInvModal('add')}>
                   <i className="fa-solid fa-plus"></i> إضافة مادة جديدة
                 </button>
@@ -1046,7 +1281,7 @@ export default function App() {
               <input type="text" className="glass-input" placeholder="ابحث عن مادة..." />
             </div>
             <div className="table-container">
-              <table className="glass-table">
+              <table className="glass-table" id="inventory-table">
                 <thead>
                   <tr>
                     <th>الباركود</th>
@@ -1112,8 +1347,8 @@ export default function App() {
             </div>
 
             <div className="table-container">
-              <h2 className="section-title">فواتير المشتريات الأخيرة</h2>
-              <table className="glass-table">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h2 className="section-title" style={{ margin: 0 }}>فواتير المشتريات الأخيرة</h2><button className="btn btn-secondary" onClick={() => exportTableToWord('purchases-table', 'سجل المشتريات')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button></div>
+              <table className="glass-table" id="purchases-table">
                 <thead>
                   <tr>
                     <th>رقم الفاتورة</th>
@@ -1207,7 +1442,8 @@ export default function App() {
               </div>
 
               <div className="table-responsive" style={{ flex: 1 }}>
-                <table className="glass-table">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><h3 style={{ margin: 0 }}>سجل التوالف</h3><button className="btn btn-secondary" onClick={() => exportTableToWord('damages-table', 'سجل التوالف')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button></div>
+                <table className="glass-table" id="damages-table">
                   <thead>
                     <tr>
                       <th>التاريخ</th>
@@ -1258,7 +1494,8 @@ export default function App() {
               </div>
 
               <div className="table-responsive" style={{ flex: 1 }}>
-                <table className="glass-table">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><h3 style={{ margin: 0 }}>سجل الإنتاج</h3><button className="btn btn-secondary" onClick={() => exportTableToWord('production-table', 'سجل الإنتاج')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button></div>
+                <table className="glass-table" id="production-table">
                   <thead>
                     <tr>
                       <th>التاريخ</th>
@@ -1318,7 +1555,8 @@ export default function App() {
             </div>
 
             <div className="glass-card table-container">
-              <table className="glass-table">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><h3 style={{ margin: 0 }}>سجلات الصيانة</h3><button className="btn btn-secondary" onClick={() => exportTableToWord('maintenance-table', 'سجلات الصيانة')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button></div>
+              <table className="glass-table" id="maintenance-table">
                 <thead>
                   <tr>
                     <th>رقم الوصل</th>
@@ -1513,14 +1751,17 @@ export default function App() {
                   <div className="glass-card" style={{ padding: '24px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                       <h3 style={{ margin: 0, fontSize: '16px' }}><i className="fa-solid fa-file-invoice-dollar text-warning"></i> المصاريف التشغيلية (إيجار، رواتب، الخ)</h3>
-                      <button className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setExpenseModal({ isOpen: true, amount: '', category: 'عام', note: '' })}>
-                        <i className="fa-solid fa-plus"></i> إضافة مصروف
-                      </button>
+                      <div>
+                        <button className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '13px', marginLeft: '8px' }} onClick={() => exportTableToWord('expenses-table', 'المصاريف التشغيلية')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button>
+                        <button className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setExpenseModal({ isOpen: true, amount: '', category: 'عام', note: '' })}>
+                          <i className="fa-solid fa-plus"></i> إضافة مصروف
+                        </button>
+                      </div>
                     </div>
                     {filteredExpenses.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)', background: 'rgba(0,0,0,0.1)', borderRadius: '8px' }}>لا توجد مصاريف مسجلة في هذه الفترة.</div>
                     ) : (
-                      <table className="glass-table" style={{ width: '100%', fontSize: '13px' }}>
+                      <table className="glass-table" id="expenses-table" style={{ width: '100%', fontSize: '13px' }}>
                         <thead><tr><th style={{ padding: '10px' }}>التاريخ</th><th style={{ padding: '10px' }}>النوع</th><th style={{ padding: '10px' }}>المبلغ</th><th style={{ padding: '10px' }}>ملاحظات</th><th style={{ padding: '10px', textAlign: 'center' }}>إجراء</th></tr></thead>
                         <tbody>
                           {filteredExpenses.map(exp => (
@@ -1529,7 +1770,7 @@ export default function App() {
                               <td style={{ padding: '10px' }}><span className="badge badge-warning">{exp.category}</span></td>
                               <td style={{ padding: '10px', color: 'var(--danger-color)', fontWeight: 'bold' }}>{exp.amount.toLocaleString()} د.ع</td>
                               <td style={{ padding: '10px', color: 'var(--text-secondary)' }}>{exp.note || '-'}</td>
-                              <td style={{ padding: '10px', textAlign: 'center' }}><button className="btn-close" style={{ margin: '0 auto' }} onClick={() => { if(confirm('هل أنت متأكد من حذف هذا المصروف؟')) setExpenses(expenses.filter(e => e.id !== exp.id)) }}><i className="fa-solid fa-trash"></i></button></td>
+                              <td style={{ padding: '10px', textAlign: 'center' }}><button className="btn-close" style={{ margin: '0 auto' }} onClick={async () => { if(confirm('هل أنت متأكد من حذف هذا المصروف؟')) { await supabase.from('expenses').delete().eq('id', exp.id); setExpenses(expenses.filter(e => e.id !== exp.id)); } }}><i className="fa-solid fa-trash"></i></button></td>
                             </tr>
                           ))}
                         </tbody>
@@ -2078,9 +2319,9 @@ export default function App() {
                 </div>
               </div>
 
-              <h3 style={{ fontSize: '16px', marginBottom: '12px', color: 'var(--text-secondary)' }}>سجل فواتير اليوم</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><h3 style={{ fontSize: '16px', margin: 0, color: 'var(--text-secondary)' }}>سجل فواتير اليوم</h3><button className="btn btn-secondary" onClick={() => exportTableToWord('sales-table', 'سجل المبيعات')}><i className="fa-solid fa-file-word"></i> تصدير وورد</button></div>
               <div style={{ overflowX: 'auto' }}>
-                <table className="glass-table" style={{ width: '100%', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                <table className="glass-table" id="sales-table" style={{ width: '100%', fontSize: '13px', whiteSpace: 'nowrap' }}>
                   <thead>
                     <tr>
                       <th style={{ padding: '10px' }}>رقم الفاتورة</th>
@@ -2367,12 +2608,16 @@ export default function App() {
             </div>
             <div className="modal-footer" style={{ gap: '12px' }}>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setExpenseModal({ isOpen: false, amount: '', category: 'عام', note: '' })}>إلغاء</button>
-              <button className="btn btn-primary" style={{ flex: 1, background: 'var(--success-color)' }} onClick={() => {
+              <button className="btn btn-primary" style={{ flex: 1, background: 'var(--success-color)' }} onClick={async () => {
                 if (!expenseModal.amount || isNaN(Number(expenseModal.amount))) {
-                  alert('يرجى إدخال مبلغ صحيح');
+                  setErrorModal({ isOpen: true, message: 'يرجى إدخال مبلغ صحيح' });
                   return;
                 }
-                setExpenses([{ id: Date.now().toString(), date: new Date().toISOString().split('T')[0], amount: Number(expenseModal.amount), category: expenseModal.category || 'عام', note: expenseModal.note }, ...expenses]);
+                const newExp = { id: Date.now().toString(), date: new Date().toISOString().split('T')[0], amount: Number(expenseModal.amount), category: expenseModal.category || 'عام', note: expenseModal.note };
+                const dbExp = { date: newExp.date, amount: newExp.amount, category: newExp.category, description: newExp.note };
+                const { data } = await supabase.from('expenses').insert([dbExp]).select();
+                if (data && data.length > 0) newExp.id = data[0].id.toString();
+                setExpenses([newExp, ...expenses]);
                 setExpenseModal({ isOpen: false, amount: '', category: 'عام', note: '' });
               }}><i className="fa-solid fa-check"></i> حفظ المصروف</button>
             </div>
