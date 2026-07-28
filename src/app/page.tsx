@@ -988,6 +988,7 @@ export default function App() {
           ],
           shading: isHeader ? { fill: "4f46e5" } : undefined,
           margins: { top: 100, bottom: 100, left: 100, right: 100 },
+          width: { size: `${100 / (cells.length - (actionIndex !== -1 ? 1 : 0))}%`, type: WidthType.PERCENTAGE },
         }));
       });
 
@@ -1026,7 +1027,7 @@ export default function App() {
           }),
           new Table({
             rows: docRows,
-            width: { size: 100, type: WidthType.PERCENTAGE },
+            width: { size: '100%', type: WidthType.PERCENTAGE },
             layout: TableLayoutType.AUTOFIT,
           }),
         ],
