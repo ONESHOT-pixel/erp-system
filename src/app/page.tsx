@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Barcode from 'react-barcode';
+import { supabase } from '@/lib/supabaseClient';
 
 // --- Types ---
 type Product = {
@@ -247,10 +248,17 @@ export default function App() {
   const [categories, setCategories] = useState<string[]>(['إلكترونيات', 'إكسسوارات', 'شاشات']);
   const [newCategory, setNewCategory] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const [products, setProducts] = useState<Product[]>([
-    { id: '1', barcode: '1002938475', name: 'لابتوب Asus ROG', category: 'إلكترونيات', quantity: 15, lowStockAlert: 5, costPrice: 1000000, price: 1200000 },
-    { id: '2', barcode: '1002938476', name: 'شاشة LG', category: 'شاشات', quantity: 3, lowStockAlert: 5, costPrice: 350000, price: 450000 },
-  ]);
+  const [products, setProducts] = useState<Product[]>([]);
+  
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
+    if (data) setProducts(data);
+  };
+
   const [isInvModalOpen, setIsInvModalOpen] = useState(false);
   const [invModalType, setInvModalType] = useState<'add' | 'edit'>('add');
   const [invEditingId, setInvEditingId] = useState<string | null>(null);
@@ -360,21 +368,37 @@ export default function App() {
     setInvFormData({ ...invFormData, category: updatedCategories[0] });
   };
 
-  const handleSaveInvModal = () => {
+  const handleSaveInvModal = async () => {
     if (!invFormData.name || !invFormData.category) return alert('يرجى ملء الحقول المطلوبة!');
     const finalBarcode = invFormData.barcode || Math.floor(1000000000 + Math.random() * 9000000000).toString();
-    const finalProduct = { ...invFormData, barcode: finalBarcode };
+    const finalProduct = {
+      barcode: finalBarcode,
+      name: invFormData.name,
+      category: invFormData.category,
+      quantity: invFormData.quantity,
+      lowStockAlert: invFormData.lowStockAlert,
+      costPrice: invFormData.costPrice,
+      price: invFormData.price
+    };
     
-    if (invModalType === 'add') setProducts([...products, { ...finalProduct, id: Date.now().toString() }]);
-    else setProducts(products.map(p => p.id === invEditingId ? finalProduct : p));
+    if (invModalType === 'add') {
+      const { data, error } = await supabase.from('products').insert([finalProduct]).select();
+      if (data && data.length > 0) setProducts([data[0], ...products]);
+      if (error) alert('Error: ' + error.message);
+    } else {
+      const { data, error } = await supabase.from('products').update(finalProduct).eq('id', invEditingId).select();
+      if (data && data.length > 0) setProducts(products.map(p => p.id === invEditingId ? data[0] : p));
+      if (error) alert('Error: ' + error.message);
+    }
     closeInvModal();
   };
 
   const confirmDelete = (id: string, type: 'inventory' | 'purchasing', title: string) => {
     setDeleteConfirm({ isOpen: true, id, type, title });
   };
-  const executeDelete = () => {
+  const executeDelete = async () => {
     if (deleteConfirm.type === 'inventory') {
+      await supabase.from('products').delete().eq('id', deleteConfirm.id);
       setProducts(products.filter(p => p.id !== deleteConfirm.id));
     } else if (deleteConfirm.type === 'purchasing') {
       const invoiceToDelete = purchases.find(p => p.id === deleteConfirm.id);
