@@ -1038,6 +1038,11 @@ export default function App() {
             </a>
           </li>
         </ul>
+        <div style={{ marginTop: 'auto', padding: '20px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+          <button className="btn btn-secondary" style={{ width: '100%', display: 'flex', justifyContent: 'center', gap: '8px' }} onClick={handleBackup}>
+            <i className="fa-solid fa-database"></i> نسخ احتياطي
+          </button>
+        </div>
       </aside>
 
       {/* Main Content Area */}
