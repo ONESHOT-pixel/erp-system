@@ -254,7 +254,9 @@ const persistProductChanges = async (
 
 // الوصل الحراري يخدم نوعي المستند (بيع/صيانة) فيقرأ الحقول المشتركة بينهما
 // وما يخصّ كل نوع. لذلك الحقول الخاصة اختيارية.
-type ReceiptItem = { name: string; quantity: number; total: number };
+// cartQuantity هي الكمية المباعة. الحقل quantity في CartItem يحمل رصيد
+// المخزن وقت البيع، وطباعته على وصل الزبون تعطي رقماً خاطئاً تماماً.
+type ReceiptItem = { name: string; cartQuantity: number; total: number };
 
 type ReceiptData = {
   customerName?: string;
@@ -288,7 +290,7 @@ export const generateThermalReceipt = (data: ReceiptData, type: 'sales' | 'maint
     itemsHtml = (data.items || []).map((item) => `
       <tr>
         <td style="padding: 4px 0; border-bottom: 1px dashed #ccc;">${item.name}</td>
-        <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.quantity}</td>
+        <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.cartQuantity}</td>
         <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: left;">${item.total.toLocaleString()}</td>
       </tr>
     `).join('');
@@ -518,7 +520,15 @@ export default function App() {
 
   const fetchExpenses = async () => {
     const { data } = await supabase.from('expenses').select('*').order('id', { ascending: false });
-    if (data) setExpenses(data.map(d => ({ ...d, id: d.id.toString() })));
+    // العمود في قاعدة البيانات اسمه description بينما الحقل في التطبيق note؛
+    // نسخ الصف كما هو كان يترك note فارغاً فتضيع الملاحظات عند العرض.
+    if (data) setExpenses(data.map(d => ({
+      id: d.id.toString(),
+      date: d.date,
+      amount: d.amount,
+      category: d.category,
+      note: d.description || '',
+    })));
   };
 
   const fetchMaintenance = async () => {
@@ -1960,20 +1970,41 @@ ${cleanRows}
               };
 
               const filteredSales = salesInvoices.filter(i => isDateInRange(i.date));
-              const filteredPurchases = purchases.filter(i => isDateInRange(i.date));
+              // المشتريات لا تُفلتر بتاريخ الفاتورة: النقد يُنسب لتاريخ الدفعة
+              // نفسها، وذلك يتم داخل cashMovedInRange أدناه.
               const filteredExpenses = expenses.filter(i => isDateInRange(i.date));
               const filteredDamages = damages.filter(i => isDateInRange(i.date));
               const filteredMaintenance = maintenanceTickets.filter(i => isDateInRange(i.receiveDate));
 
-              const cashSales = filteredSales.reduce((sum, inv) => sum + (inv.paymentStatus === 'paid' ? inv.totalAmount : (inv.paidAmount || 0)), 0);
-              const receivedPayments = filteredSales.reduce((sum, inv) => sum + (inv.payments || []).filter(p => p.note !== 'دفعة أولية' && isDateInRange(p.date)).reduce((ps, p) => ps + p.amount, 0), 0);
-              const maintenanceIncome = filteredMaintenance.reduce((sum, t) => sum + t.deposit + (t.status === 'completed' ? (t.estimatedCost - t.deposit) : 0), 0);
-              const totalCashIn = cashSales + receivedPayments + maintenanceIncome;
+              /**
+                 مجموع ما تحرّك فعلاً من نقد خلال الفترة.
 
-              const cashPurchases = filteredPurchases.reduce((sum, inv) => sum + (inv.paymentStatus === 'paid' ? inv.totalAmount : (inv.paidAmount || 0)), 0);
-              const paidPayments = filteredPurchases.reduce((sum, inv) => sum + (inv.payments || []).filter(p => p.note !== 'دفعة أولية' && isDateInRange(p.date)).reduce((ps, p) => ps + p.amount, 0), 0);
+                 يُحسب من سجل الدفعات وحده — لا من paidAmount — لأن paidAmount
+                 هو مجموع الدفعات أصلاً، فجمعه مع الدفعات يحتسبها مرتين.
+
+                 والمرور على كل الفواتير لا على المفلترة بتاريخها مقصود: الدفعة
+                 تُنسب لتاريخ سدادها لا لتاريخ الفاتورة، وإلا اختفت دفعة آب على
+                 فاتورة تموز من تقرير آب.
+               */
+              const cashMovedInRange = (invoices: (PurchaseInvoice | SalesInvoice)[]) =>
+                invoices.reduce((sum, inv) => {
+                  const pays = inv.payments || [];
+                  // فواتير قديمة بلا سجل دفعات: نعتمد المبلغ المدفوع بتاريخ الفاتورة.
+                  if (pays.length === 0) {
+                    return sum + (isDateInRange(inv.date) ? (inv.paidAmount || 0) : 0);
+                  }
+                  return sum + pays.filter(p => isDateInRange(p.date)).reduce((ps, p) => ps + p.amount, 0);
+                }, 0);
+
+              const cashFromSales = cashMovedInRange(salesInvoices);
+              // العربون فقط: عند تسليم التذكرة يُحوَّل الباقي إلى فاتورة بيع،
+              // فاحتسابه هنا أيضاً يعني حسابه مرتين.
+              const maintenanceDeposits = filteredMaintenance.reduce((sum, t) => sum + (t.deposit || 0), 0);
+              const totalCashIn = cashFromSales + maintenanceDeposits;
+
+              const cashToSuppliers = cashMovedInRange(purchases);
               const totalExpensesAmount = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
-              const totalCashOut = cashPurchases + paidPayments + totalExpensesAmount;
+              const totalCashOut = cashToSuppliers + totalExpensesAmount;
               const currentCashBalance = totalCashIn - totalCashOut;
 
               let totalSalesProfit = 0;
@@ -1988,7 +2019,10 @@ ${cleanRows}
                 });
               });
               const damagesLoss = filteredDamages.reduce((sum, d) => sum + (d.costPrice * d.quantity), 0);
-              const netProfit = totalSalesProfit + maintenanceIncome - damagesLoss - totalExpensesAmount;
+              // العربون يدخل الربح مباشرة؛ أما باقي أجور الصيانة فيصير فاتورة بيع
+              // عند التسليم ويُحتسب ضمن totalSalesProfit، فلا يُضاف هنا ثانية.
+              const maintenanceProfit = maintenanceDeposits;
+              const netProfit = totalSalesProfit + maintenanceProfit - damagesLoss - totalExpensesAmount;
 
               const debtsForUs = salesInvoices.filter(i => i.paymentStatus === 'credit').reduce((sum, inv) => sum + (inv.totalAmount - (inv.paidAmount || 0)), 0);
               const debtsOnUs = purchases.filter(i => i.paymentStatus === 'credit').reduce((sum, inv) => sum + (inv.totalAmount - (inv.paidAmount || 0)), 0);
@@ -2036,7 +2070,7 @@ ${cleanRows}
                       </div>
                       <div className="detail-row">
                         <span>أرباح المبيعات والصيانة</span>
-                        <b className="up">{(totalSalesProfit + maintenanceIncome).toLocaleString()} د.ع</b>
+                        <b className="up">{(totalSalesProfit + maintenanceProfit).toLocaleString()} د.ع</b>
                       </div>
                       <div className="detail-row">
                         <span>الخسائر <em>توالف + مصاريف</em></span>
@@ -3017,7 +3051,8 @@ ${cleanRows}
                 }
                 const newExp = { id: newId(), date: new Date().toISOString().split('T')[0], amount: Number(expenseModal.amount), category: expenseModal.category || 'عام', note: expenseModal.note };
                 const dbExp = { date: newExp.date, amount: newExp.amount, category: newExp.category, description: newExp.note };
-                const { data } = await supabase.from('expenses').insert([dbExp]).select();
+                const { data, error } = await supabase.from('expenses').insert([dbExp]).select();
+                if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ المصروف: ' + error.message });
                 if (data && data.length > 0) newExp.id = data[0].id.toString();
                 setExpenses([newExp, ...expenses]);
                 setExpenseModal({ isOpen: false, amount: '', category: 'عام', note: '' });
