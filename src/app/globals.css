@@ -1883,3 +1883,128 @@ select {
   .nav-item { padding: 12px 14px; font-size: 13px; gap: 10px; }
   .main-content { padding: 20px; }
 }
+
+/* ===== دفتر دفعات الفاتورة (PaymentLedger) ===== */
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.ledger-summary > div {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
+}
+
+.ledger-summary-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.ledger-summary-value {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.ledger-summary-value.paid { color: var(--neon-green); }
+.ledger-summary-value.due  { color: #fbbf24; }
+
+.ledger-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.ledger-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--neon-cyan);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.ledger-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--glass-border-hi);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+}
+
+.ledger-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  transition: border-color 0.25s var(--ease-out), background 0.25s var(--ease-out);
+}
+
+.ledger-row:hover { border-color: var(--glass-border-hi); }
+
+.ledger-row.confirming {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.ledger-row-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.ledger-date { color: var(--text-secondary); }
+.ledger-amount { font-weight: 800; color: var(--neon-green); }
+.ledger-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ledger-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #fca5a5;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .ledger-summary { grid-template-columns: 1fr; gap: 8px; }
+  .ledger-summary > div { display: flex; justify-content: space-between; text-align: right; }
+  .ledger-summary-label, .ledger-summary-value { display: inline; }
+  .ledger-row { flex-wrap: wrap; }
+  .ledger-list { max-height: 200px; }
+}

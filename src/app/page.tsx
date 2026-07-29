@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Barcode from 'react-barcode';
 import { supabase } from '@/lib/supabaseClient';
+import PaymentLedger, { type PaymentRecord } from '@/components/PaymentLedger';
 
 // --- Types ---
 type Product = {
@@ -34,12 +35,6 @@ type ExpenseRecord = {
   note: string;
 };
 
-type PaymentRecord = {
-  id: string;
-  date: string;
-  amount: number;
-  note?: string;
-};
 
 type PurchaseInvoice = {
   id: string;
@@ -418,6 +413,7 @@ export default function App() {
   const [invEditingId, setInvEditingId] = useState<string | null>(null);
   const [invFormData, setInvFormData] = useState<Product>({ id: '', barcode: '', name: '', category: '', quantity: 0, lowStockAlert: 5, costPrice: 0, price: 0 });
   const [imageUploading, setImageUploading] = useState(false);
+  const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
 
   // --- Purchasing State ---
   const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
@@ -705,8 +701,52 @@ export default function App() {
     const newItems = purFormData.items.filter(item => item.id !== itemId);
     setPurFormData({ ...purFormData, items: newItems, totalAmount: newItems.reduce((acc, item) => acc + item.total, 0) });
   };
+  /** الفاتورة المفتوحة حالياً في نافذة الدفعات. */
+  const paymentInvoice = (paymentModal.type === 'purchase' ? purchases : salesInvoices)
+    .find(inv => inv.id === paymentModal.invoiceId);
+
+  /**
+   * يكتب سجل الدفعات الجديد في قاعدة البيانات ثم في الحالة.
+   *
+   * المبلغ المدفوع يُشتق من مجموع الدفعات بدل زيادته أو إنقاصه يدوياً،
+   * حتى لا ينحرف الرقم عن السجل عند الإضافة أو الحذف. حالة السداد
+   * تُعاد حسابها من الرقم الناتج.
+   */
+  const commitPayments = async (payments: PaymentRecord[]): Promise<boolean> => {
+    const target = paymentInvoice;
+    if (!target) {
+      setErrorModal({ isOpen: true, message: 'لم يتم العثور على الفاتورة.' });
+      return false;
+    }
+
+    const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+    const paymentStatus: 'paid' | 'credit' = paidAmount >= target.totalAmount ? 'paid' : 'credit';
+    const table = paymentModal.type === 'purchase' ? 'purchases' : 'sales_invoices';
+
+    const { error } = await supabase
+      .from(table)
+      .update({ paid_amount: paidAmount, payment_status: paymentStatus, payments })
+      .eq('id', target.id);
+
+    if (error) {
+      setErrorModal({ isOpen: true, message: 'تعذّر حفظ التعديل: ' + error.message });
+      return false;
+    }
+
+    if (paymentModal.type === 'purchase') {
+      setPurchases(purchases.map(inv =>
+        inv.id === target.id ? { ...inv, payments, paidAmount, paymentStatus } : inv));
+    } else {
+      setSalesInvoices(salesInvoices.map(inv =>
+        inv.id === target.id ? { ...inv, payments, paidAmount, paymentStatus } : inv));
+    }
+    return true;
+  };
+
   const handleSavePayment = async () => {
     if (paymentModal.amount <= 0) return setErrorModal({ isOpen: true, message: 'يرجى إدخال مبلغ صحيح.' });
+    if (!paymentInvoice) return setErrorModal({ isOpen: true, message: 'لم يتم العثور على الفاتورة.' });
+
     const newPayment: PaymentRecord = {
       id: newId(),
       date: paymentModal.date,
@@ -714,37 +754,15 @@ export default function App() {
       note: paymentModal.method,
     };
 
-    // نفس الحساب للحالتين: تُضاف الدفعة للسجل ويُعاد تقييم حالة السداد.
-    const applyPayment = <T extends PurchaseInvoice | SalesInvoice>(inv: T): T => {
-      const payments = [...(inv.payments || []), newPayment];
-      const paidAmount = (inv.paidAmount || 0) + newPayment.amount;
-      return {
-        ...inv,
-        payments,
-        paidAmount,
-        paymentStatus: (paidAmount >= inv.totalAmount ? 'paid' : 'credit') as 'paid' | 'credit',
-      };
-    };
+    const ok = await commitPayments([...(paymentInvoice.payments || []), newPayment]);
+    if (ok) setPaymentModal({ ...paymentModal, amount: 0, method: 'نقدي' });
+  };
 
-    const table = paymentModal.type === 'purchase' ? 'purchases' : 'sales_invoices';
-    const source = paymentModal.type === 'purchase' ? purchases : salesInvoices;
-    const target = source.find(inv => inv.id === paymentModal.invoiceId);
-    if (!target) return setErrorModal({ isOpen: true, message: 'لم يتم العثور على الفاتورة.' });
-
-    const updated = applyPayment(target);
-    const { error } = await supabase
-      .from(table)
-      .update({ paid_amount: updated.paidAmount, payment_status: updated.paymentStatus, payments: updated.payments })
-      .eq('id', updated.id);
-
-    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ الدفعة: ' + error.message });
-
-    if (paymentModal.type === 'purchase') {
-      setPurchases(purchases.map(inv => inv.id === updated.id ? updated as PurchaseInvoice : inv));
-    } else {
-      setSalesInvoices(salesInvoices.map(inv => inv.id === updated.id ? updated as SalesInvoice : inv));
-    }
-    setPaymentModal({ ...paymentModal, isOpen: false, amount: 0, method: 'نقدي' });
+  const handleDeletePayment = async (paymentId: string) => {
+    if (!paymentInvoice) return;
+    setDeletingPaymentId(paymentId);
+    await commitPayments((paymentInvoice.payments || []).filter(p => p.id !== paymentId));
+    setDeletingPaymentId(null);
   };
 
   const handlePurSave = async () => {
@@ -2253,23 +2271,13 @@ ${cleanRows}
                   )}
                   <div style={{ textAlign: 'left' }}><span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '12px' }}>حالة الدفع:</span>{selectedInvoice.paymentStatus === 'paid' ? <span className="badge badge-success"><i className="fa-solid fa-check"></i> تم الدفع</span> : <span className="badge badge-warning"><i className="fa-solid fa-clock"></i> آجل (دين)</span>}</div>
                 </div>
-                {selectedInvoice.payments && selectedInvoice.payments.length > 0 && (
-                  <div style={{ marginTop: '24px' }}>
-                    <h3 style={{ fontSize: '14px', marginBottom: '12px', color: 'var(--text-secondary)' }}><i className="fa-solid fa-clock-rotate-left"></i> سجل الدفعات السابقة (الوصولات)</h3>
-                    <table className="glass-table" style={{ fontSize: '13px', width: '100%' }}>
-                      <thead><tr><th style={{ padding: '8px' }}>التاريخ</th><th style={{ padding: '8px' }}>المبلغ المدفوع</th><th style={{ padding: '8px' }}>طريقة الدفع / ملاحظات</th></tr></thead>
-                      <tbody>
-                        {selectedInvoice.payments.map(pay => (
-                          <tr key={pay.id}>
-                            <td style={{ padding: '8px' }}>{pay.date}</td>
-                            <td style={{ padding: '8px', color: 'var(--success-color)', fontWeight: 'bold' }}>{pay.amount.toLocaleString()} د.ع</td>
-                            <td style={{ padding: '8px' }}>{pay.note || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                {/* عرض فقط هنا؛ التعديل والحذف من نافذة الدفعات (زر "دفع"). */}
+                <div style={{ marginTop: '24px' }}>
+                  <PaymentLedger
+                    payments={selectedInvoice.payments || []}
+                    totalAmount={selectedInvoice.totalAmount}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -2846,35 +2854,55 @@ ${cleanRows}
       )}
 
       {/* PAYMENT MODAL */}
-      {paymentModal.isOpen && (
+      {paymentModal.isOpen && paymentInvoice && (
         <div className="modal-overlay" style={{ zIndex: 9999 }}>
-          <div className="modal-content animated" style={{ maxWidth: '400px' }}>
+          <div className="modal-content animated" style={{ maxWidth: '560px' }}>
             <div className="modal-header">
-              <h2><i className="fa-solid fa-hand-holding-dollar text-success"></i> تسديد دفعة جديدة</h2>
+              <h2>
+                <i className="fa-solid fa-hand-holding-dollar text-success"></i> دفعات الفاتورة
+                <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--text-secondary)', marginInlineStart: '10px' }}>
+                  {paymentModal.type === 'purchase'
+                    ? (paymentInvoice as PurchaseInvoice).supplierName
+                    : (paymentInvoice as SalesInvoice).customerName}
+                  {' · '}{paymentInvoice.invoiceNumber}
+                </span>
+              </h2>
               <button className="btn-close" onClick={() => setPaymentModal({...paymentModal, isOpen: false})}><i className="fa-solid fa-xmark"></i></button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
-                <label>تاريخ التسديد</label>
-                <input type="date" value={paymentModal.date} onChange={e => setPaymentModal({...paymentModal, date: e.target.value})} className="glass-input" style={{ width: '100%', padding: '10px' }} />
-              </div>
-              <div className="form-group">
-                <label>المبلغ المدفوع (د.ع)</label>
-                <input type="number" min="1" value={paymentModal.amount || ''} onChange={e => setPaymentModal({...paymentModal, amount: Number(e.target.value)})} placeholder="أدخل المبلغ المستلم..." className="glass-input" style={{ width: '100%', padding: '10px' }} />
-              </div>
-              <div className="form-group">
-                <label>طريقة الدفع (ملاحظات)</label>
-                <select value={paymentModal.method} onChange={e => setPaymentModal({...paymentModal, method: e.target.value})} className="glass-input" style={{ width: '100%', padding: '10px' }}>
-                  <option value="نقدي" style={{ color: 'black' }}>نقدي (كاش)</option>
-                  <option value="زين كاش" style={{ color: 'black' }}>زين كاش</option>
-                  <option value="حوالة بنكية" style={{ color: 'black' }}>حوالة بنكية</option>
-                  <option value="أخرى" style={{ color: 'black' }}>أخرى</option>
-                </select>
+              <PaymentLedger
+                payments={paymentInvoice.payments || []}
+                totalAmount={paymentInvoice.totalAmount}
+                onDelete={handleDeletePayment}
+                deletingId={deletingPaymentId}
+              />
+
+              <h4 className="ledger-title" style={{ marginTop: '20px' }}>
+                <i className="fa-solid fa-plus"></i> تسجيل دفعة جديدة
+              </h4>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <div className="form-group" style={{ flex: '1 1 140px', marginBottom: 0 }}>
+                  <label>تاريخ التسديد</label>
+                  <input type="date" value={paymentModal.date} onChange={e => setPaymentModal({...paymentModal, date: e.target.value})} className="glass-input" style={{ width: '100%', padding: '10px' }} />
+                </div>
+                <div className="form-group" style={{ flex: '1 1 140px', marginBottom: 0 }}>
+                  <label>المبلغ (د.ع)</label>
+                  <input type="number" min="1" value={paymentModal.amount || ''} onChange={e => setPaymentModal({...paymentModal, amount: Number(e.target.value)})} placeholder="المبلغ..." className="glass-input" style={{ width: '100%', padding: '10px' }} />
+                </div>
+                <div className="form-group" style={{ flex: '1 1 140px', marginBottom: 0 }}>
+                  <label>طريقة الدفع</label>
+                  <select value={paymentModal.method} onChange={e => setPaymentModal({...paymentModal, method: e.target.value})} className="glass-input" style={{ width: '100%', padding: '10px' }}>
+                    <option value="نقدي" style={{ color: 'black' }}>نقدي (كاش)</option>
+                    <option value="زين كاش" style={{ color: 'black' }}>زين كاش</option>
+                    <option value="حوالة بنكية" style={{ color: 'black' }}>حوالة بنكية</option>
+                    <option value="أخرى" style={{ color: 'black' }}>أخرى</option>
+                  </select>
+                </div>
               </div>
             </div>
             <div className="modal-footer" style={{ gap: '12px' }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPaymentModal({...paymentModal, isOpen: false})}>إلغاء</button>
-              <button className="btn btn-primary" style={{ flex: 1, background: 'var(--success-color)' }} onClick={handleSavePayment}><i className="fa-solid fa-check"></i> حفظ الدفعة</button>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPaymentModal({...paymentModal, isOpen: false})}>إغلاق</button>
+              <button className="btn btn-save" style={{ flex: 1 }} onClick={handleSavePayment}><i className="fa-solid fa-check"></i> إضافة الدفعة</button>
             </div>
           </div>
         </div>
