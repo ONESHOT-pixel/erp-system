@@ -14,6 +14,7 @@ type Product = {
   lowStockAlert: number;
   costPrice: number;
   price: number;
+  imageUrl?: string;
 };
 
 type PurchaseItem = {
@@ -150,7 +151,49 @@ const toDbProduct = (p: Product) => ({
   lowstockalert: p.lowStockAlert,
   costprice: p.costPrice,
   price: p.price,
+  image_url: p.imageUrl || null,
 });
+
+// الاتجاه المعاكس: صف قاعدة البيانات -> شكل المادة داخل التطبيق.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fromDbProduct = (d: any): Product => ({
+  id: d.id.toString(),
+  barcode: d.barcode,
+  name: d.name,
+  category: d.category,
+  quantity: d.quantity,
+  lowStockAlert: d.lowstockalert ?? 5,
+  costPrice: d.costprice ?? 0,
+  price: d.price ?? 0,
+  imageUrl: d.image_url || undefined,
+});
+
+/**
+ * يرفع صورة المادة إلى مخزن Supabase ويُعيد رابطها العام.
+ * اسم الملف عشوائي حتى لا تتصادم الصور ذات الاسم نفسه.
+ */
+const uploadProductImage = async (
+  file: File
+): Promise<{ url: string | null; error: string | null }> => {
+  if (!file.type.startsWith('image/')) {
+    return { url: null, error: 'الملف المختار ليس صورة.' };
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    return { url: null, error: 'حجم الصورة أكبر من 3 ميغابايت. اختر صورة أصغر.' };
+  }
+
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from('product-images')
+    .upload(path, file, { cacheControl: '31536000', upsert: false });
+
+  if (error) return { url: null, error: error.message };
+
+  const { data } = supabase.storage.from('product-images').getPublicUrl(path);
+  return { url: data.publicUrl, error: null };
+};
 
 const toDbPurchase = (inv: PurchaseInvoice) => ({
   invoice_number: inv.invoiceNumber,
@@ -374,6 +417,7 @@ export default function App() {
   const [invModalType, setInvModalType] = useState<'add' | 'edit'>('add');
   const [invEditingId, setInvEditingId] = useState<string | null>(null);
   const [invFormData, setInvFormData] = useState<Product>({ id: '', barcode: '', name: '', category: '', quantity: 0, lowStockAlert: 5, costPrice: 0, price: 0 });
+  const [imageUploading, setImageUploading] = useState(false);
 
   // --- Purchasing State ---
   const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
@@ -443,7 +487,8 @@ export default function App() {
         ...d,
         id: d.id.toString(),
         lowStockAlert: d.lowstockalert !== undefined ? d.lowstockalert : d.lowStockAlert,
-        costPrice: d.costprice !== undefined ? d.costprice : d.costPrice
+        costPrice: d.costprice !== undefined ? d.costprice : d.costPrice,
+        imageUrl: d.image_url || undefined
       }));
       setProducts(mapped);
     }
@@ -586,24 +631,16 @@ export default function App() {
   const handleSaveInvModal = async () => {
     if (!invFormData.name || !invFormData.category) return setErrorModal({ isOpen: true, message: 'يرجى ملء الحقول المطلوبة!' });
     const finalBarcode = invFormData.barcode || newBarcode();
-    const finalProduct = {
-      barcode: finalBarcode,
-      name: invFormData.name,
-      category: invFormData.category,
-      quantity: invFormData.quantity,
-      lowstockalert: invFormData.lowStockAlert,
-      costprice: invFormData.costPrice,
-      price: invFormData.price
-    };
+    const finalProduct = toDbProduct({ ...invFormData, barcode: finalBarcode });
     
     if (invModalType === 'add') {
       const { data, error } = await supabase.from('products').insert([finalProduct]).select();
-      if (data && data.length > 0) setProducts([data[0], ...products]);
-      if (error) setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
+      if (error) return setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
+      if (data && data.length > 0) setProducts([fromDbProduct(data[0]), ...products]);
     } else {
       const { data, error } = await supabase.from('products').update(finalProduct).eq('id', invEditingId).select();
-      if (data && data.length > 0) setProducts(products.map(p => p.id === invEditingId ? data[0] : p));
-      if (error) setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
+      if (error) return setErrorModal({ isOpen: true, message: 'خطأ: ' + error.message });
+      if (data && data.length > 0) setProducts(products.map(p => p.id === invEditingId ? fromDbProduct(data[0]) : p));
     }
     closeInvModal();
   };
@@ -1352,12 +1389,19 @@ ${cleanRows}
                 <div className="pos-product-grid">
                   {filteredPosProducts.map(p => (
                     <div key={p.id} className={`pos-product-card ${p.quantity === 0 ? 'disabled' : ''}`} onClick={() => addToCart(p)}>
-                      <div style={{ fontSize: '32px', color: 'var(--primary-color)', marginBottom: '8px' }}>
-                        <i className="fa-solid fa-box-open"></i>
+                      <span className={`pos-card-stock ${p.quantity <= p.lowStockAlert ? 'low' : ''}`} title="الكمية المتوفرة">
+                        {p.quantity}
+                      </span>
+                      <div className={`pos-card-media ${p.imageUrl ? 'has-img' : ''}`}>
+                        {p.imageUrl
+                          // eslint-disable-next-line @next/next/no-img-element -- static export + images.unoptimized، فـ next/image بلا فائدة هنا
+                          ? <img src={p.imageUrl} alt={p.name} loading="lazy" />
+                          : <i className="fa-solid fa-box-open"></i>}
                       </div>
-                      <span style={{ fontWeight: '700', fontSize: '15px', lineHeight: '1.3' }}>{p.name}</span>
-                      <span style={{ color: '#4ade80', fontWeight: '800', fontSize: '18px' }}>{p.price.toLocaleString()} د.ع</span>
-                      <span style={{ fontSize: '12px', color: '#94a3b8', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '8px', display: 'inline-block', margin: '0 auto' }}>المتوفر: {p.quantity}</span>
+                      <span className="pos-card-name">{p.name}</span>
+                      <span className="pos-card-price">
+                        {p.price.toLocaleString()} <small>د.ع</small>
+                      </span>
                     </div>
                   ))}
                   {filteredPosProducts.length === 0 && <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '60px', color: '#94a3b8', fontSize: '18px' }}><i className="fa-solid fa-ghost" style={{fontSize:'40px', marginBottom:'16px', display:'block', opacity:0.5}}></i> لا توجد مواد مطابقة للبحث.</div>}
@@ -2012,6 +2056,49 @@ ${cleanRows}
               <button className="btn-close" onClick={closeInvModal}><i className="fa-solid fa-xmark"></i></button>
             </div>
             <div className="modal-body">
+              <div className="form-group">
+                <label>صورة المادة <span style={{ fontWeight: 400, opacity: 0.7 }}>(تظهر للكاشير في شاشة البيع)</span></label>
+                <div className="img-upload">
+                  <div className="img-upload-preview">
+                    {invFormData.imageUrl
+                      // eslint-disable-next-line @next/next/no-img-element -- static export + images.unoptimized، فـ next/image بلا فائدة هنا
+                      ? <img src={invFormData.imageUrl} alt={invFormData.name || 'صورة المادة'} />
+                      : <i className="fa-solid fa-image"></i>}
+                  </div>
+                  <div className="img-upload-actions">
+                    <label className="btn btn-secondary" style={{ cursor: imageUploading ? 'wait' : 'pointer' }}>
+                      <i className={imageUploading ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-arrow-up-from-bracket'}></i>
+                      {imageUploading ? ' جارٍ الرفع…' : (invFormData.imageUrl ? ' تغيير الصورة' : ' اختر صورة')}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        disabled={imageUploading}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = ''; // يسمح بإعادة اختيار الملف نفسه
+                          if (!file) return;
+                          setImageUploading(true);
+                          const { url, error } = await uploadProductImage(file);
+                          setImageUploading(false);
+                          if (error) return setErrorModal({ isOpen: true, message: 'تعذّر رفع الصورة: ' + error });
+                          if (url) setInvFormData(prev => ({ ...prev, imageUrl: url }));
+                        }}
+                      />
+                    </label>
+                    {invFormData.imageUrl && (
+                      <button
+                        className="btn btn-secondary"
+                        style={{ color: 'var(--danger-color)' }}
+                        onClick={() => setInvFormData({ ...invFormData, imageUrl: undefined })}
+                      >
+                        <i className="fa-solid fa-trash"></i> إزالة
+                      </button>
+                    )}
+                    <span className="img-upload-hint">JPG أو PNG — حتى 3 ميغابايت</span>
+                  </div>
+                </div>
+              </div>
               <div className="form-group">
                 <label>الباركود</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
