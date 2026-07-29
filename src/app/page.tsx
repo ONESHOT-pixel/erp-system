@@ -441,6 +441,9 @@ export default function App() {
   const [successModal, setSuccessModal] = useState<{isOpen: boolean, invoice: SalesInvoice | null}>({isOpen: false, invoice: null});
   const [errorModal, setErrorModal] = useState<{isOpen: boolean, message: string}>({isOpen: false, message: ''});
   const [receiptModal, setReceiptModal] = useState<{isOpen: boolean, invoice: SalesInvoice | null}>({isOpen: false, invoice: null});
+  // تعديل فاتورة بيع: البيانات الوصفية فقط. تعديل المواد يتطلب إعادة
+  // تسوية المخزون، والمسار الطبيعي في نقطة البيع هو حذف الفاتورة وإعادة بيعها.
+  const [salesEditModal, setSalesEditModal] = useState<{isOpen: boolean, id: string, customerName: string, date: string, dueDate: string}>({isOpen: false, id: '', customerName: '', date: '', dueDate: ''});
 
   // Production & Damages State
   const [damages, setDamages] = useState<DamageRecord[]>([]);
@@ -464,7 +467,7 @@ export default function App() {
   const [partInput, setPartInput] = useState<UsedPart>({ itemId: '', itemName: '', quantity: 1, costPrice: 0, sellPrice: 0 });
 
   // Custom Delete Confirmation Modal
-  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, id: string, type: 'inventory' | 'purchasing', title: string }>({ isOpen: false, id: '', type: 'inventory', title: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, id: string, type: 'inventory' | 'purchasing' | 'sales', title: string }>({ isOpen: false, id: '', type: 'inventory', title: '' });
 
   const fetchCategories = async () => {
     const { data, error } = await supabase.from('categories').select('name');
@@ -641,7 +644,7 @@ export default function App() {
     closeInvModal();
   };
 
-  const confirmDelete = (id: string, type: 'inventory' | 'purchasing', title: string) => {
+  const confirmDelete = (id: string, type: 'inventory' | 'purchasing' | 'sales', title: string) => {
     setDeleteConfirm({ isOpen: true, id, type, title });
   };
   const executeDelete = async () => {
@@ -668,8 +671,48 @@ export default function App() {
       const { error } = await supabase.from('purchases').delete().eq('id', deleteConfirm.id);
       if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حذف الفاتورة: ' + error.message });
       setPurchases(purchases.filter(p => p.id !== deleteConfirm.id));
+    } else if (deleteConfirm.type === 'sales') {
+      // حذف فاتورة بيع يرجّع الكميات المباعة إلى المخزن.
+      const invoiceToDelete = salesInvoices.find(i => i.id === deleteConfirm.id);
+      if (invoiceToDelete) {
+        let restored = [...products];
+        for (const soldItem of invoiceToDelete.items) {
+          restored = restored.map(p =>
+            p.id === soldItem.id ? { ...p, quantity: p.quantity + soldItem.cartQuantity } : p
+          );
+        }
+        const synced = await persistProductChanges(restored, products);
+        setProducts(synced.products);
+        if (synced.error) {
+          return setErrorModal({ isOpen: true, message: 'تعذّر إرجاع الكميات للمخزن: ' + synced.error });
+        }
+      }
+      const { error } = await supabase.from('sales_invoices').delete().eq('id', deleteConfirm.id);
+      if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حذف الفاتورة: ' + error.message });
+      setSalesInvoices(salesInvoices.filter(i => i.id !== deleteConfirm.id));
     }
     setDeleteConfirm({ isOpen: false, id: '', type: 'inventory', title: '' });
+  };
+
+  const handleSaveSalesEdit = async () => {
+    if (!salesEditModal.customerName.trim()) {
+      return setErrorModal({ isOpen: true, message: 'يرجى إدخال اسم الزبون.' });
+    }
+    const { error } = await supabase
+      .from('sales_invoices')
+      .update({
+        customer_name: salesEditModal.customerName.trim(),
+        date: salesEditModal.date,
+        due_date: salesEditModal.dueDate || null,
+      })
+      .eq('id', salesEditModal.id);
+
+    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ التعديل: ' + error.message });
+
+    setSalesInvoices(salesInvoices.map(inv => inv.id === salesEditModal.id
+      ? { ...inv, customerName: salesEditModal.customerName.trim(), date: salesEditModal.date, dueDate: salesEditModal.dueDate }
+      : inv));
+    setSalesEditModal({ ...salesEditModal, isOpen: false });
   };
 
 
@@ -2587,7 +2630,7 @@ ${cleanRows}
           <div className="modal-content animated" style={{ maxWidth: '400px', textAlign: 'center' }}>
             <div style={{ color: 'var(--danger-color)', fontSize: '48px', marginBottom: '16px' }}><i className="fa-solid fa-triangle-exclamation"></i></div>
             <h2 style={{ marginBottom: '16px', fontSize: '20px' }}>تأكيد الحذف</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>هل أنت متأكد من حذف <strong>&laquo;{deleteConfirm.title}&raquo;</strong>؟<br/>{deleteConfirm.type === 'purchasing' && <span style={{ color: 'var(--warning-color)', fontSize: '13px' }}>ملاحظة: سيتم خصم كميات هذه الفاتورة من المخزن أيضاً!</span>} لا يمكن التراجع.</p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>هل أنت متأكد من حذف <strong>&laquo;{deleteConfirm.title}&raquo;</strong>؟<br/>{deleteConfirm.type === 'purchasing' && <span style={{ color: 'var(--warning-color)', fontSize: '13px' }}>ملاحظة: سيتم خصم كميات هذه الفاتورة من المخزن أيضاً!</span>}{deleteConfirm.type === 'sales' && <span style={{ color: 'var(--warning-color)', fontSize: '13px' }}>ملاحظة: سترجع الكميات المباعة إلى المخزن، وتُحذف الفاتورة من الإحصائيات.</span>} لا يمكن التراجع.</p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setDeleteConfirm({ isOpen: false, id: '', type: 'inventory', title: '' })}>إلغاء</button>
               <button className="btn btn-delete" style={{ flex: 1, display: 'flex', justifyContent: 'center', background: 'var(--danger-color)', color: 'white' }} onClick={executeDelete}>نعم، احذف</button>
@@ -2658,7 +2701,8 @@ ${cleanRows}
                         <td style={{ fontSize: '11px', maxWidth: '200px' }}>
                           <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>{inv.items.length} مواد:</div>
                           <div style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {inv.items.map(item => `${item.name} (${item.quantity})`).join('، ')}
+                            {/* cartQuantity هي الكمية المباعة؛ quantity هي رصيد المخزن وقت البيع. */}
+                            {inv.items.map(item => `${item.name} (${item.cartQuantity})`).join('، ')}
                           </div>
                         </td>
                         <td style={{ fontWeight: 'bold' }}>
@@ -2680,9 +2724,17 @@ ${cleanRows}
                           )}
                         </td>
                         <td>
-                          <button className="btn-icon" style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary-color)' }} onClick={() => generateThermalReceipt(inv, 'sales')} title="طباعة الفاتورة">
-                            <i className="fa-solid fa-print"></i>
-                          </button>
+                          <div className="action-btns" style={{ justifyContent: 'center' }}>
+                            <button className="btn-icon" style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary-color)' }} onClick={() => generateThermalReceipt(inv, 'sales')} title="طباعة الفاتورة">
+                              <i className="fa-solid fa-print"></i>
+                            </button>
+                            <button className="btn-icon btn-edit" title="تعديل بيانات الفاتورة" onClick={() => setSalesEditModal({ isOpen: true, id: inv.id, customerName: inv.customerName, date: (inv.date || '').split('T')[0], dueDate: (inv.dueDate || '').split('T')[0] })}>
+                              <i className="fa-solid fa-pen"></i>
+                            </button>
+                            <button className="btn-icon btn-delete" title="حذف الفاتورة وإرجاع الكميات" onClick={() => confirmDelete(inv.id, 'sales', inv.invoiceNumber)}>
+                              <i className="fa-solid fa-trash"></i>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -2694,6 +2746,40 @@ ${cleanRows}
             </div>
             <div className="modal-footer" style={{ justifyContent: 'center' }}>
               <button className="btn btn-secondary" onClick={() => setIsDailyStatsOpen(false)} style={{ width: '100%' }}>إغلاق</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SALES INVOICE EDIT MODAL */}
+      {salesEditModal.isOpen && (
+        <div className="modal-overlay" style={{ zIndex: 9500 }}>
+          <div className="modal-content animated" style={{ maxWidth: '440px' }}>
+            <div className="modal-header">
+              <h2><i className="fa-solid fa-pen text-primary"></i> تعديل بيانات الفاتورة</h2>
+              <button className="btn-close" onClick={() => setSalesEditModal({ ...salesEditModal, isOpen: false })}><i className="fa-solid fa-xmark"></i></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>اسم الزبون</label>
+                <input type="text" value={salesEditModal.customerName} onChange={e => setSalesEditModal({ ...salesEditModal, customerName: e.target.value })} className="glass-input" style={{ width: '100%', padding: '10px' }} />
+              </div>
+              <div className="form-group">
+                <label>تاريخ الشراء</label>
+                <input type="date" value={salesEditModal.date} onChange={e => setSalesEditModal({ ...salesEditModal, date: e.target.value })} className="glass-input" style={{ width: '100%', padding: '10px' }} />
+              </div>
+              <div className="form-group">
+                <label>تاريخ الاستحقاق <span style={{ fontWeight: 400, opacity: 0.7 }}>(للفواتير الآجلة)</span></label>
+                <input type="date" value={salesEditModal.dueDate} onChange={e => setSalesEditModal({ ...salesEditModal, dueDate: e.target.value })} className="glass-input" style={{ width: '100%', padding: '10px' }} />
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <i className="fa-solid fa-circle-info"></i> المواد والمبالغ لا تُعدَّل من هنا لأن ذلك يغيّر المخزون.
+                لتصحيح مادة أو كمية، احذف الفاتورة وأعد البيع. ولتعديل الدفعات استخدم زر «تسديد».
+              </p>
+            </div>
+            <div className="modal-footer" style={{ gap: '12px' }}>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setSalesEditModal({ ...salesEditModal, isOpen: false })}>إلغاء</button>
+              <button className="btn btn-save" style={{ flex: 1 }} onClick={handleSaveSalesEdit}><i className="fa-solid fa-check"></i> حفظ</button>
             </div>
           </div>
         </div>
