@@ -1244,7 +1244,7 @@ ${cleanRows}
   return (
     <div className="app-container">
       {/* Sidebar */}
-      <aside className="sidebar" style={{ width: '240px' }}>
+      <aside className="sidebar">
         <div className="sidebar-logo">
           <i className="fa-solid fa-layer-group"></i>
           <span>نظام ERP</span>

@@ -37,7 +37,7 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  --sidebar-width: 260px;
+  --sidebar-width: 240px;
 }
 
 /* احترام تفضيل تقليل الحركة في نظام المستخدم */
@@ -1722,4 +1722,164 @@ select {
 .action-card:hover i {
   transform: scale(1.18) translateY(-2px);
   color: var(--neon-cyan);
+}
+
+/* ============================================================
+   طبقة الجوال — تُكمّل الاستعلام الأقدم وتصحّح ما فاته.
+   الاستعلام السابق كان يستهدف .product-grid/.product-card وهي
+   أصناف غير مستخدمة في الترميز؛ الأصناف الفعلية هي pos-product-*.
+   ============================================================ */
+
+@media (max-width: 768px) {
+
+  /* --- الشريط العلوي (كان شريطاً جانبياً) --- */
+  .sidebar {
+    width: 100% !important;
+    flex: 0 0 auto;
+    gap: 6px;
+    scrollbar-width: none;
+    /* الفاصل المضيء عمودي على سطح المكتب، أفقي هنا */
+    box-shadow: 0 6px 20px -10px rgba(0, 0, 0, 0.8);
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .sidebar::after {
+    inset-block: auto 0;
+    inset-inline: 0;
+    width: auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.45), transparent);
+  }
+
+  .nav-links { flex-wrap: nowrap; }
+  .nav-item { white-space: nowrap; border-radius: 10px; }
+  .nav-item:hover { transform: none; }
+  /* الشريط الجانبي المضيء يصبح تحت العنصر */
+  .nav-item::before {
+    inset-inline: 12px;
+    inset-block-start: auto;
+    bottom: 0;
+    top: auto;
+    translate: none;
+    width: auto;
+    height: 0;
+  }
+  .nav-item.active::before { height: 2px; }
+
+  /* --- الرأس: العنوان والأزرار قد لا يتسعان في سطر --- */
+  .header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .header-title { font-size: 17px; padding-bottom: 8px; }
+  .header-title::after { width: 36px; height: 2px; }
+  .header-actions { gap: 8px; flex-wrap: wrap; }
+
+  /* --- التمرير ---
+     الاستعلام الأقدم جعل .main-content عنصر flex بلا تمرير، فحُبس
+     محتوى كل التبويبات داخل ارتفاع الشاشة ولم يعد الوصول لأسفله ممكناً.
+     على الجوال الأنسب أن تمرّر الصفحة طبيعياً. */
+  body, .app-container { overflow: visible; height: auto; }
+  .app-container { min-height: 100dvh; }
+
+  .main-content {
+    display: block;
+    height: auto;
+    overflow: visible;
+    padding: 12px;
+  }
+
+  /* --- نقطة البيع: السلة تحت المواد بدل تقسيم ثابت --- */
+  .pos-container {
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
+    gap: 12px;
+  }
+
+  .pos-products,
+  .pos-cart {
+    flex: none;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    min-height: 0;
+  }
+
+  .pos-cart { border-top: 2px solid var(--accent-color); }
+  .cart-items { max-height: 240px; overflow-y: auto; }
+
+  /* عمودان بدل عمود واحد يترك نصف العرض فارغاً */
+  .pos-product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .pos-product-card { padding: 14px 10px 12px; border-radius: 14px; }
+  .pos-product-card:hover { transform: none; box-shadow: var(--shadow-sm); }
+  .pos-card-media { width: 44px; height: 44px; font-size: 18px; }
+  .pos-card-media.has-img { width: 100%; height: 84px; }
+  .pos-card-name { font-size: 13px; }
+  .pos-card-price { font-size: 16px; }
+
+  .pos-search-input { padding: 14px 18px 14px 48px; font-size: 15px; }
+
+  /* --- الجداول: تمرير أفقي بدل كسر التخطيط --- */
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .glass-table { min-width: 620px; }
+  /* إلغاء الإزاحة عند اللمس — لا معنى لها بلا مؤشر */
+  .glass-table tbody tr:hover { transform: none; }
+
+  /* --- البطاقات والإحصائيات --- */
+  .glass-card { padding: 16px; }
+  .glass-card:hover { transform: none; box-shadow: var(--shadow-sm); }
+  .dashboard-grid { gap: 10px; }
+  .quick-actions { gap: 10px; }
+  .action-card { min-width: 100%; padding: 20px 16px; }
+
+  /* --- النوافذ: تُعرض كورقة سفلية أقرب للإبهام --- */
+  .modal-overlay { align-items: flex-end; }
+  .modal-content {
+    width: 100%;
+    max-width: none;
+    max-height: 88vh;
+    border-radius: 20px 20px 0 0;
+    animation: sheetIn 0.35s var(--ease-out) both;
+  }
+  .modal-footer { position: sticky; bottom: 0; background: var(--bg-elevated); }
+
+  @keyframes sheetIn {
+    from { opacity: 0; transform: translateY(28px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* --- رفع الصورة --- */
+  .img-upload { flex-direction: column; align-items: stretch; }
+  .img-upload-preview { width: 100%; height: 130px; }
+
+  /* --- الأزرار: مساحة لمس مريحة (44px توصية إرشادات اللمس) --- */
+  .btn { padding: 11px 18px; min-height: 42px; }
+  .btn:hover { transform: none; }
+  .btn::after { display: none; } /* اللمعة بلا معنى بلا مؤشر */
+  .btn-icon { width: 36px; height: 36px; }
+  .btn-icon:hover { transform: none; }
+
+  /* منع تكبير iOS التلقائي عند التركيز: يحدث تحت 16px */
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* --- الجوالات الضيقة جداً --- */
+@media (max-width: 380px) {
+  .main-content { padding: 10px; }
+  .pos-product-grid { gap: 8px; }
+  .pos-card-name { font-size: 12px; }
+  .pos-card-price { font-size: 15px; }
+}
+
+/* --- اللوحيات: الشريط الجانبي يبقى لكن أضيق --- */
+@media (min-width: 769px) and (max-width: 1100px) {
+  :root { --sidebar-width: 200px; }
+  .nav-item { padding: 12px 14px; font-size: 13px; gap: 10px; }
+  .main-content { padding: 20px; }
 }
