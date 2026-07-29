@@ -23,12 +23,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Install dependencies
         run: npm ci
       - name: Build with Next.js
+        # المفاتيح تأتي من GitHub Secrets. لا تكتبها هنا مباشرة —
+        # ملفات الـ workflow مرئية للجميع في المستودع.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: npx next build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

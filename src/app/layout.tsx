@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AuthGate from "@/components/AuthGate";
 
 export const metadata: Metadata = {
   title: "نظام إدارة الموارد الشامل | ERP System",
@@ -18,7 +19,7 @@ export default function RootLayout({
       </head>
       <body>
         <div className="app-container">
-          {children}
+          <AuthGate>{children}</AuthGate>
         </div>
       </body>
     </html>

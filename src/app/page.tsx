@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Barcode from 'react-barcode';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -126,7 +126,116 @@ type SalesInvoice = {
   payments?: PaymentRecord[];
 };
 
-export const generateThermalReceipt = (data: any, type: 'sales' | 'maintenance') => {
+// --- مولّدات المعرفات والأرقام ---
+// Date.now و Math.random دوال غير نقية. كل الاستدعاءات هنا تحدث داخل معالِجات
+// أحداث (لا أثناء الرسم)، لكن React Compiler لا يستطيع إثبات ذلك إذا كُتبت
+// داخل جسم المكوّن، فيرفضها. وضعها هنا على مستوى الوحدة يحلّ المشكلة
+// دون تغيير السلوك.
+const newId = () => Date.now().toString();
+const newTempProductId = () => `NEW_${Date.now()}`;
+const newTempProducedId = () => `NEW_PROD_${Date.now()}`;
+const newBarcode = () => Math.floor(1000000000 + Math.random() * 9000000000).toString();
+const newInvoiceNumber = () => `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+const newPurchaseNumber = () => `PUR-${Math.floor(1000 + Math.random() * 9000)}`;
+const newTicketNumber = () => `MN-${Math.floor(10000 + Math.random() * 90000)}`;
+const newProductionBarcode = () => `PROD-${Math.floor(10000 + Math.random() * 90000)}`;
+
+// --- جسر الأسماء بين الكود وقاعدة البيانات ---
+// أعمدة جدول products بأحرف صغيرة بلا فواصل (lowstockalert لا lowStockAlert).
+const toDbProduct = (p: Product) => ({
+  barcode: p.barcode,
+  name: p.name,
+  category: p.category,
+  quantity: p.quantity,
+  lowstockalert: p.lowStockAlert,
+  costprice: p.costPrice,
+  price: p.price,
+});
+
+const toDbPurchase = (inv: PurchaseInvoice) => ({
+  invoice_number: inv.invoiceNumber,
+  supplier_name: inv.supplierName,
+  date: inv.date,
+  total_amount: inv.totalAmount,
+  paid_amount: inv.paidAmount,
+  payment_status: inv.paymentStatus,
+  items: inv.items,
+  notes: inv.notes,
+  payments: inv.payments || [],
+});
+
+const toDbMaintenance = (t: MaintenanceTicket) => ({
+  ticket_number: t.ticketNumber,
+  customer_name: t.customerName,
+  phone: t.customerPhone,
+  device_type: t.deviceType,
+  issue_description: t.issueDescription,
+  estimated_cost: t.estimatedCost,
+  status: t.status,
+  date: t.receiveDate,
+  used_parts: t.usedParts,
+  deposit: t.deposit,
+  warranty_period: t.warrantyPeriod,
+});
+
+/**
+ * يزامن تغييرات المخزون مع قاعدة البيانات.
+ *
+ * المواد التي لم تكن موجودة في القائمة السابقة (المضافة تلقائياً من فاتورة
+ * شراء أو من الإنتاج) تُدرَج وتأخذ معرّفها الحقيقي بدل المعرّف المؤقت.
+ * الباقي تُحدَّث كميته فقط وفقط إذا تغيّرت فعلاً.
+ *
+ * يُرجع القائمة بعد استبدال المعرفات المؤقتة، وأول خطأ حصل إن وُجد.
+ */
+const persistProductChanges = async (
+  next: Product[],
+  prev: Product[]
+): Promise<{ products: Product[]; error: string | null }> => {
+  const result = [...next];
+  let firstError: string | null = null;
+
+  for (let i = 0; i < result.length; i++) {
+    const p = result[i];
+    const before = prev.find((o) => o.id === p.id);
+
+    if (!before) {
+      const { data, error } = await supabase.from('products').insert([toDbProduct(p)]).select();
+      if (error) {
+        firstError = firstError ?? error.message;
+        continue;
+      }
+      if (data && data.length > 0) result[i] = { ...p, id: data[0].id.toString() };
+    } else if (before.quantity !== p.quantity) {
+      const { error } = await supabase.from('products').update({ quantity: p.quantity }).eq('id', p.id);
+      if (error) firstError = firstError ?? error.message;
+    }
+  }
+
+  return { products: result, error: firstError };
+};
+
+// الوصل الحراري يخدم نوعي المستند (بيع/صيانة) فيقرأ الحقول المشتركة بينهما
+// وما يخصّ كل نوع. لذلك الحقول الخاصة اختيارية.
+type ReceiptItem = { name: string; quantity: number; total: number };
+
+type ReceiptData = {
+  customerName?: string;
+  totalAmount: number;
+  // خاص بفواتير البيع
+  items?: ReceiptItem[];
+  invoiceNumber?: string;
+  date?: string;
+  paymentStatus?: string;
+  paidAmount?: number;
+  // خاص بتذاكر الصيانة
+  ticketNumber?: string;
+  receiveDate?: string;
+  deviceType?: string;
+  estimatedCost?: number;
+  deposit?: number;
+};
+
+export const generateThermalReceipt = (data: ReceiptData, type: 'sales' | 'maintenance') => {
   const printWindow = window.open('', '_blank');
   if (!printWindow) return;
 
@@ -138,7 +247,7 @@ export const generateThermalReceipt = (data: any, type: 'sales' | 'maintenance')
 
   let itemsHtml = '';
   if (type === 'sales') {
-    itemsHtml = data.items.map((item: any) => `
+    itemsHtml = (data.items || []).map((item) => `
       <tr>
         <td style="padding: 4px 0; border-bottom: 1px dashed #ccc;">${item.name}</td>
         <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.quantity}</td>
@@ -189,7 +298,7 @@ export const generateThermalReceipt = (data: any, type: 'sales' | 'maintenance')
             <tr><td>رقم الوصل:</td><td style="text-align: left;">${type === 'sales' ? data.invoiceNumber : data.ticketNumber}</td></tr>
             <tr><td>التاريخ:</td><td style="text-align: left;">${type === 'sales' ? data.date : data.receiveDate}</td></tr>
             <tr><td>الزبون:</td><td style="text-align: left;">${data.customerName || 'زبون نقدي'}</td></tr>
-            ${type === 'sales' ? `<tr><td>نوع الدفع:</td><td style="text-align: left;">${getPaymentMethodAr(data.paymentStatus)}</td></tr>` : ''}
+            ${type === 'sales' ? `<tr><td>نوع الدفع:</td><td style="text-align: left;">${getPaymentMethodAr(data.paymentStatus || '')}</td></tr>` : ''}
           </table>
         </div>
 
@@ -211,8 +320,8 @@ export const generateThermalReceipt = (data: any, type: 'sales' | 'maintenance')
             ${type === 'sales' ? `
               <tr><td>الإجمالي:</td><td style="text-align: left;">${data.totalAmount.toLocaleString()} د.ع</td></tr>
               ${data.paymentStatus === 'credit' ? `
-                <tr><td>الواصل:</td><td style="text-align: left;">${data.paidAmount.toLocaleString()} د.ع</td></tr>
-                <tr><td>الباقي:</td><td style="text-align: left;">${(data.totalAmount - data.paidAmount).toLocaleString()} د.ع</td></tr>
+                <tr><td>الواصل:</td><td style="text-align: left;">${(data.paidAmount || 0).toLocaleString()} د.ع</td></tr>
+                <tr><td>الباقي:</td><td style="text-align: left;">${(data.totalAmount - (data.paidAmount || 0)).toLocaleString()} د.ع</td></tr>
               ` : ''}
             ` : `
               <tr><td>كلفة التقدير:</td><td style="text-align: left;">${(data.estimatedCost || 0).toLocaleString()} د.ع</td></tr>
@@ -250,105 +359,16 @@ export default function App() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   
-  const [categories, setCategories] = useState<string[]>(['إلكترونيات', 'إكسسوارات', 'شاشات']);
+  // التصنيفات المخزّنة في قاعدة البيانات (أو localStorage عند تعذّر الاتصال).
+  const [baseCategories, setBaseCategories] = useState<string[]>(['إلكترونيات', 'إكسسوارات', 'شاشات']);
 
-  // Load Categories from Supabase (with fallback)
-  const fetchCategories = async () => {
-    const { data, error } = await supabase.from('categories').select('name');
-    
-    let baseCategories = ['إلكترونيات', 'إكسسوارات', 'شاشات'];
-    if (data && !error) {
-      baseCategories = data.map(d => d.name);
-    } else {
-      const saved = localStorage.getItem('pos_categories');
-      if (saved) baseCategories = JSON.parse(saved);
-    }
-    
-    // Merge with any categories existing in products
-    const productCategories = products.map(p => p.category).filter(Boolean);
-    const allCategories = Array.from(new Set([...baseCategories, ...productCategories]));
-    
-    if (JSON.stringify(categories) !== JSON.stringify(allCategories)) {
-      setCategories(allCategories);
-      localStorage.setItem('pos_categories', JSON.stringify(allCategories));
-    }
-  };
+  // القائمة المعروضة = تصنيفات قاعدة البيانات + أي تصنيف مستخدَم فعلاً في المواد.
+  // مشتقّة بدل تخزينها في state، فلا نحتاج effect يكتب state عند كل تغيّر للمواد.
+  const categories = useMemo(
+    () => Array.from(new Set([...baseCategories, ...products.map(p => p.category).filter(Boolean)])),
+    [baseCategories, products]
+  );
 
-  useEffect(() => {
-    fetchCategories();
-  }, [products]);
-  
-  useEffect(() => {
-    fetchProducts();
-    fetchPurchases();
-    fetchSales();
-    fetchExpenses();
-    fetchMaintenance();
-    fetchDamages();
-    fetchProductions();
-  }, []);
-
-  const fetchProducts = async () => {
-    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
-    if (data) {
-      const mapped = data.map(d => ({
-        ...d,
-        id: d.id.toString(),
-        lowStockAlert: d.lowstockalert !== undefined ? d.lowstockalert : d.lowStockAlert,
-        costPrice: d.costprice !== undefined ? d.costprice : d.costPrice
-      }));
-      setProducts(mapped);
-    }
-  };
-
-  const fetchPurchases = async () => {
-    const { data } = await supabase.from('purchases').select('*').order('id', { ascending: false });
-    if (data) {
-      const mapped = data.map(d => ({
-        id: d.id.toString(), invoiceNumber: d.invoice_number, supplierName: d.supplier_name, date: d.date, items: d.items || [],
-        totalAmount: d.total_amount, paidAmount: d.deposit, paymentStatus: d.payment_status, dueDate: d.due_date || '', notes: d.notes, payments: d.payments || []
-      }));
-      setPurchases(mapped);
-    }
-  };
-
-  const fetchSales = async () => {
-    const { data } = await supabase.from('sales_invoices').select('*').order('id', { ascending: false });
-    if (data) {
-      const mapped = data.map(d => ({
-        id: d.id.toString(), invoiceNumber: d.invoice_number, customerName: d.customer_name, date: d.date, items: d.items || [],
-        totalAmount: d.total_amount, paidAmount: d.deposit, paymentStatus: d.payment_status, dueDate: d.due_date || '', payments: d.payments || [], subtotal: d.total_amount, discount: 0
-      }));
-      setSalesInvoices(mapped);
-    }
-  };
-
-  const fetchExpenses = async () => {
-    const { data } = await supabase.from('expenses').select('*').order('id', { ascending: false });
-    if (data) setExpenses(data.map(d => ({ ...d, id: d.id.toString() })));
-  };
-
-  const fetchMaintenance = async () => {
-    const { data } = await supabase.from('maintenance_tickets').select('*').order('id', { ascending: false });
-    if (data) {
-      const mapped = data.map(d => ({
-        id: d.id.toString(), ticketNumber: `MN-${d.id}`, customerName: d.customer_name, customerPhone: d.phone, deviceType: d.device_type, issueDescription: d.issue_description,
-        status: d.status, estimatedCost: d.cost || 0, receiveDate: d.date, notes: d.notes, deviceModel: d.device_model,
-        usedParts: d.used_parts || [], deposit: d.deposit || 0, warrantyPeriod: d.warranty_period || ''
-      }));
-      setMaintenanceTickets(mapped);
-    }
-  };
-
-  const fetchDamages = async () => {
-    const { data } = await supabase.from('damages').select('*').order('id', { ascending: false });
-    if (data) setDamages(data.map(d => ({ id: d.id.toString(), itemId: d.item_id, itemName: d.item_name, quantity: d.quantity, costPrice: d.cost_price, totalLoss: d.total_loss, reason: d.reason, date: d.date })));
-  };
-
-  const fetchProductions = async () => {
-    const { data } = await supabase.from('productions').select('*').order('id', { ascending: false });
-    if (data) setProductions(data.map(d => ({ id: d.id.toString(), producedItemId: d.produced_item_id, producedItemName: d.produced_item_name, quantityProduced: d.quantity_produced, totalCost: d.estimated_cost, components: d.components || [], date: d.date })));
-  };
 
   const [isInvModalOpen, setIsInvModalOpen] = useState(false);
   const [invModalType, setInvModalType] = useState<'add' | 'edit'>('add');
@@ -406,6 +426,98 @@ export default function App() {
   // Custom Delete Confirmation Modal
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, id: string, type: 'inventory' | 'purchasing', title: string }>({ isOpen: false, id: '', type: 'inventory', title: '' });
 
+  const fetchCategories = async () => {
+    const { data, error } = await supabase.from('categories').select('name');
+    if (data && !error) {
+      setBaseCategories(data.map(d => d.name));
+      return;
+    }
+    const saved = localStorage.getItem('pos_categories');
+    if (saved) setBaseCategories(JSON.parse(saved));
+  };
+
+  const fetchProducts = async () => {
+    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        ...d,
+        id: d.id.toString(),
+        lowStockAlert: d.lowstockalert !== undefined ? d.lowstockalert : d.lowStockAlert,
+        costPrice: d.costprice !== undefined ? d.costprice : d.costPrice
+      }));
+      setProducts(mapped);
+    }
+  };
+
+  const fetchPurchases = async () => {
+    const { data } = await supabase.from('purchases').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), invoiceNumber: d.invoice_number, supplierName: d.supplier_name, date: d.date, items: d.items || [],
+        totalAmount: d.total_amount, paidAmount: d.paid_amount || 0, paymentStatus: d.payment_status, notes: d.notes || '', payments: d.payments || []
+      }));
+      setPurchases(mapped);
+    }
+  };
+
+  const fetchSales = async () => {
+    const { data } = await supabase.from('sales_invoices').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), invoiceNumber: d.invoice_number, customerName: d.customer_name, date: d.date, items: d.items || [],
+        totalAmount: d.total_amount, paidAmount: d.paid_amount || 0, paymentStatus: d.payment_status, dueDate: d.due_date || '', payments: d.payments || [],
+        subtotal: d.subtotal ?? d.total_amount, discount: d.discount || 0
+      }));
+      setSalesInvoices(mapped);
+    }
+  };
+
+  const fetchExpenses = async () => {
+    const { data } = await supabase.from('expenses').select('*').order('id', { ascending: false });
+    if (data) setExpenses(data.map(d => ({ ...d, id: d.id.toString() })));
+  };
+
+  const fetchMaintenance = async () => {
+    const { data } = await supabase.from('maintenance_tickets').select('*').order('id', { ascending: false });
+    if (data) {
+      const mapped = data.map(d => ({
+        id: d.id.toString(), ticketNumber: d.ticket_number || `MN-${d.id}`, customerName: d.customer_name, customerPhone: d.phone, deviceType: d.device_type,
+        issueDescription: d.issue_description, status: d.status, estimatedCost: d.estimated_cost || 0, receiveDate: d.date,
+        usedParts: d.used_parts || [], deposit: d.deposit || 0, warrantyPeriod: d.warranty_period || ''
+      }));
+      setMaintenanceTickets(mapped);
+    }
+  };
+
+  const fetchDamages = async () => {
+    const { data } = await supabase.from('damages').select('*').order('id', { ascending: false });
+    if (data) setDamages(data.map(d => ({ id: d.id.toString(), itemId: d.item_id, itemName: d.item_name, quantity: d.quantity, costPrice: d.cost_price, totalLoss: d.total_loss, reason: d.reason, date: d.date })));
+  };
+
+  const fetchProductions = async () => {
+    const { data } = await supabase.from('productions').select('*').order('id', { ascending: false });
+    if (data) setProductions(data.map(d => ({ id: d.id.toString(), producedItemId: d.produced_item_id, producedItemName: d.produced_item_name, quantityProduced: d.quantity_produced, totalCost: d.total_cost || 0, components: d.components || [], date: d.date })));
+  };
+
+  // تحميل أولي واحد عند التركيب. معرَّف بعد دوال الجلب وتعريفات الحالة
+  // لأن استدعاءها قبل التصريح يخالف قواعد React Compiler.
+  //
+  // القاعدة set-state-in-effect معطَّلة هنا عن قصد: كل هذه الدوال async
+  // وتستدعي setState بعد await، أي في microtask لاحق لا أثناء الرسم.
+  // التطبيق static export بلا خادم، فالجلب من العميل هو الطريق الوحيد.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    fetchCategories();
+    fetchProducts();
+    fetchPurchases();
+    fetchSales();
+    fetchExpenses();
+    fetchMaintenance();
+    fetchDamages();
+    fetchProductions();
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
 
   // --- Helper Functions ---
   const getTodayDate = () => {
@@ -434,22 +546,17 @@ export default function App() {
     setShowAddCategory(false);
   };
   const closeInvModal = () => setIsInvModalOpen(false);
-  const generateBarcode = () => setInvFormData({ ...invFormData, barcode: Math.floor(1000000000 + Math.random() * 9000000000).toString() });
+  const generateBarcode = () => setInvFormData({ ...invFormData, barcode: newBarcode() });
   
   const handleAddCategory = async () => {
     if (newCategory.trim() !== '' && !categories.includes(newCategory)) {
-      const updated = [...categories, newCategory];
-      setCategories(updated);
+      const updated = [...baseCategories, newCategory];
+      setBaseCategories(updated);
       setInvFormData({ ...invFormData, category: newCategory });
-      
-      // Attempt to save to Supabase
-      const { error } = await supabase.from('categories').insert([{ name: newCategory }]);
-      if (error) {
-        // Fallback if table doesn't exist yet
-        localStorage.setItem('pos_categories', JSON.stringify(updated));
-      } else {
-        localStorage.setItem('pos_categories', JSON.stringify(updated));
-      }
+
+      await supabase.from('categories').insert([{ name: newCategory }]);
+      // نحتفظ بنسخة محلية في الحالتين لتعمل الواجهة عند انقطاع الاتصال.
+      localStorage.setItem('pos_categories', JSON.stringify(updated));
     }
     setNewCategory('');
     setShowAddCategory(false);
@@ -466,24 +573,19 @@ export default function App() {
       return;
     }
     const categoryToDelete = invFormData.category;
-    const updatedCategories = categories.filter(c => c !== categoryToDelete);
-    
+    const updatedCategories = baseCategories.filter(c => c !== categoryToDelete);
+
     // Update local state first for speed
-    setCategories(updatedCategories);
+    setBaseCategories(updatedCategories);
     setInvFormData({ ...invFormData, category: updatedCategories[0] });
-    
-    // Attempt to delete from Supabase
-    const { error } = await supabase.from('categories').delete().eq('name', categoryToDelete);
-    if (error) {
-      localStorage.setItem('pos_categories', JSON.stringify(updatedCategories));
-    } else {
-      localStorage.setItem('pos_categories', JSON.stringify(updatedCategories));
-    }
+
+    await supabase.from('categories').delete().eq('name', categoryToDelete);
+    localStorage.setItem('pos_categories', JSON.stringify(updatedCategories));
   };
 
   const handleSaveInvModal = async () => {
     if (!invFormData.name || !invFormData.category) return setErrorModal({ isOpen: true, message: 'يرجى ملء الحقول المطلوبة!' });
-    const finalBarcode = invFormData.barcode || Math.floor(1000000000 + Math.random() * 9000000000).toString();
+    const finalBarcode = invFormData.barcode || newBarcode();
     const finalProduct = {
       barcode: finalBarcode,
       name: invFormData.name,
@@ -511,25 +613,27 @@ export default function App() {
   };
   const executeDelete = async () => {
     if (deleteConfirm.type === 'inventory') {
-      await supabase.from('products').delete().eq('id', deleteConfirm.id);
+      const { error } = await supabase.from('products').delete().eq('id', deleteConfirm.id);
+      if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حذف المادة: ' + error.message });
       setProducts(products.filter(p => p.id !== deleteConfirm.id));
     } else if (deleteConfirm.type === 'purchasing') {
+      // حذف فاتورة شراء يلغي أثرها على المخزون.
       const invoiceToDelete = purchases.find(p => p.id === deleteConfirm.id);
       if (invoiceToDelete) {
         let updatedProducts = [...products];
         for (const oldItem of invoiceToDelete.items) {
-          updatedProducts = updatedProducts.map(p => {
-            if (p.id === oldItem.productId) {
-               const newQty = Math.max(0, p.quantity - oldItem.quantity);
-               supabase.from('products').update({ quantity: newQty }).eq('id', p.id).then();
-               return { ...p, quantity: newQty };
-            }
-            return p;
-          });
+          updatedProducts = updatedProducts.map(p =>
+            p.id === oldItem.productId ? { ...p, quantity: Math.max(0, p.quantity - oldItem.quantity) } : p
+          );
         }
-        setProducts(updatedProducts);
+        const synced = await persistProductChanges(updatedProducts, products);
+        setProducts(synced.products);
+        if (synced.error) {
+          return setErrorModal({ isOpen: true, message: 'تعذّر تعديل المخزون: ' + synced.error });
+        }
       }
-      await supabase.from('purchases').delete().eq('id', deleteConfirm.id);
+      const { error } = await supabase.from('purchases').delete().eq('id', deleteConfirm.id);
+      if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حذف الفاتورة: ' + error.message });
       setPurchases(purchases.filter(p => p.id !== deleteConfirm.id));
     }
     setDeleteConfirm({ isOpen: false, id: '', type: 'inventory', title: '' });
@@ -544,7 +648,7 @@ export default function App() {
       setPurFormData(invoice);
     } else {
       setPurEditingId(null);
-      setPurFormData({ id: '', invoiceNumber: `PUR-${Math.floor(1000 + Math.random() * 9000)}`, supplierName: '', date: getTodayDate(), items: [], totalAmount: 0, paidAmount: 0, paymentStatus: 'paid', dueDate: '', notes: '' });
+      setPurFormData({ id: '', invoiceNumber: newPurchaseNumber(), supplierName: '', date: getTodayDate(), items: [], totalAmount: 0, paidAmount: 0, paymentStatus: 'paid', dueDate: '', notes: '' });
     }
     setCurrentPurItem({ name: '', quantity: 1, costPrice: 0 });
     setIsPurModalOpen(true);
@@ -554,8 +658,8 @@ export default function App() {
   const addPurItemToInvoice = () => {
     if (!currentPurItem.name.trim() || currentPurItem.quantity <= 0 || currentPurItem.costPrice <= 0) return setErrorModal({ isOpen: true, message: 'يرجى تحديد اسم المادة والكمية وسعر التكلفة بشكل صحيح!' });
     const existingProduct = products.find(p => p.name === currentPurItem.name.trim());
-    const itemProductId = existingProduct ? existingProduct.id : `NEW_${Date.now()}`;
-    const newItem: PurchaseItem = { id: Date.now().toString(), productId: itemProductId, name: currentPurItem.name.trim(), quantity: currentPurItem.quantity, costPrice: currentPurItem.costPrice, total: currentPurItem.quantity * currentPurItem.costPrice };
+    const itemProductId = existingProduct ? existingProduct.id : newTempProductId();
+    const newItem: PurchaseItem = { id: newId(), productId: itemProductId, name: currentPurItem.name.trim(), quantity: currentPurItem.quantity, costPrice: currentPurItem.costPrice, total: currentPurItem.quantity * currentPurItem.costPrice };
     const newItems = [...purFormData.items, newItem];
     setPurFormData({ ...purFormData, items: newItems, totalAmount: newItems.reduce((acc, item) => acc + item.total, 0) });
     setCurrentPurItem({ name: '', quantity: 1, costPrice: 0 });
@@ -564,47 +668,57 @@ export default function App() {
     const newItems = purFormData.items.filter(item => item.id !== itemId);
     setPurFormData({ ...purFormData, items: newItems, totalAmount: newItems.reduce((acc, item) => acc + item.total, 0) });
   };
-  const handleSavePayment = () => {
+  const handleSavePayment = async () => {
     if (paymentModal.amount <= 0) return setErrorModal({ isOpen: true, message: 'يرجى إدخال مبلغ صحيح.' });
     const newPayment: PaymentRecord = {
-      id: Date.now().toString(),
+      id: newId(),
       date: paymentModal.date,
       amount: paymentModal.amount,
       note: paymentModal.method,
     };
+
+    // نفس الحساب للحالتين: تُضاف الدفعة للسجل ويُعاد تقييم حالة السداد.
+    const applyPayment = <T extends PurchaseInvoice | SalesInvoice>(inv: T): T => {
+      const payments = [...(inv.payments || []), newPayment];
+      const paidAmount = (inv.paidAmount || 0) + newPayment.amount;
+      return {
+        ...inv,
+        payments,
+        paidAmount,
+        paymentStatus: (paidAmount >= inv.totalAmount ? 'paid' : 'credit') as 'paid' | 'credit',
+      };
+    };
+
+    const table = paymentModal.type === 'purchase' ? 'purchases' : 'sales_invoices';
+    const source = paymentModal.type === 'purchase' ? purchases : salesInvoices;
+    const target = source.find(inv => inv.id === paymentModal.invoiceId);
+    if (!target) return setErrorModal({ isOpen: true, message: 'لم يتم العثور على الفاتورة.' });
+
+    const updated = applyPayment(target);
+    const { error } = await supabase
+      .from(table)
+      .update({ paid_amount: updated.paidAmount, payment_status: updated.paymentStatus, payments: updated.payments })
+      .eq('id', updated.id);
+
+    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ الدفعة: ' + error.message });
+
     if (paymentModal.type === 'purchase') {
-      const updatedPurchases = purchases.map(inv => {
-        if (inv.id === paymentModal.invoiceId) {
-          const currentPayments = inv.payments || [];
-          const newPaymentsList = [...currentPayments, newPayment];
-          const updatedPaidAmount = (inv.paidAmount || 0) + newPayment.amount;
-          const updatedPaymentStatus = updatedPaidAmount >= inv.totalAmount ? 'paid' : 'credit';
-          return { ...inv, payments: newPaymentsList, paidAmount: updatedPaidAmount, paymentStatus: updatedPaymentStatus as 'paid' | 'credit' };
-        }
-        return inv;
-      });
-      setPurchases(updatedPurchases);
+      setPurchases(purchases.map(inv => inv.id === updated.id ? updated as PurchaseInvoice : inv));
     } else {
-      const updatedSales = salesInvoices.map(inv => {
-        if (inv.id === paymentModal.invoiceId) {
-          const currentPayments = inv.payments || [];
-          const newPaymentsList = [...currentPayments, newPayment];
-          const updatedPaidAmount = (inv.paidAmount || 0) + newPayment.amount;
-          const updatedPaymentStatus = updatedPaidAmount >= inv.totalAmount ? 'paid' : 'credit';
-          return { ...inv, payments: newPaymentsList, paidAmount: updatedPaidAmount, paymentStatus: updatedPaymentStatus as 'paid' | 'credit' };
-        }
-        return inv;
-      });
-      setSalesInvoices(updatedSales);
+      setSalesInvoices(salesInvoices.map(inv => inv.id === updated.id ? updated as SalesInvoice : inv));
     }
     setPaymentModal({ ...paymentModal, isOpen: false, amount: 0, method: 'نقدي' });
   };
 
-  const handlePurSave = () => {
+  const handlePurSave = async () => {
     if (!purFormData.supplierName) return setErrorModal({ isOpen: true, message: 'يرجى إدخال اسم المورد!' });
     if (purFormData.items.length === 0) return setErrorModal({ isOpen: true, message: 'يرجى إضافة مواد للفاتورة!' });
+
+    const now = newId();
     let updatedProducts = [...products];
+
     if (purModalType === 'edit' && purEditingId) {
+      // التعديل يلغي أثر الفاتورة القديمة على المخزون ثم يطبّق الجديدة.
       const oldInvoice = purchases.find(p => p.id === purEditingId);
       if (oldInvoice) {
         oldInvoice.items.forEach(oldItem => {
@@ -612,30 +726,44 @@ export default function App() {
         });
       }
       const finalPaidAmount = purFormData.paymentStatus === 'paid' ? purFormData.totalAmount : purFormData.paidAmount;
-      const initialPayments = finalPaidAmount > 0 ? [{ id: Date.now().toString(), date: purFormData.date, amount: finalPaidAmount, note: 'دفعة أولية' }] : (purFormData.payments || []);
+      const initialPayments = finalPaidAmount > 0 ? [{ id: now, date: purFormData.date, amount: finalPaidAmount, note: 'دفعة أولية' }] : (purFormData.payments || []);
       const updatedInvoice = { ...purFormData, paidAmount: finalPaidAmount, payments: initialPayments };
-      setPurchases(purchases.map(p => p.id === purEditingId ? updatedInvoice : p));
+
       updatedInvoice.items.forEach(newItem => {
         if (newItem.productId.startsWith('NEW_')) {
-          updatedProducts.push({ id: newItem.productId, barcode: Math.floor(1000000000 + Math.random() * 9000000000).toString(), name: newItem.name, category: 'مواد مضافة تلقائياً', quantity: newItem.quantity, lowStockAlert: 5, costPrice: newItem.costPrice, price: newItem.costPrice * 1.25 });
+          updatedProducts.push({ id: newItem.productId, barcode: newBarcode(), name: newItem.name, category: 'مواد مضافة تلقائياً', quantity: newItem.quantity, lowStockAlert: 5, costPrice: newItem.costPrice, price: newItem.costPrice * 1.25 });
         } else {
           updatedProducts = updatedProducts.map(p => p.id === newItem.productId ? { ...p, quantity: p.quantity + newItem.quantity } : p);
         }
       });
+
+      const { error } = await supabase.from('purchases').update(toDbPurchase(updatedInvoice)).eq('id', purEditingId);
+      if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ فاتورة الشراء: ' + error.message });
+      setPurchases(purchases.map(p => p.id === purEditingId ? updatedInvoice : p));
     } else {
       const finalPaidAmount = purFormData.paymentStatus === 'paid' ? purFormData.totalAmount : purFormData.paidAmount;
-      const initialPayments = finalPaidAmount > 0 ? [{ id: Date.now().toString(), date: purFormData.date, amount: finalPaidAmount, note: 'دفعة أولية' }] : [];
-      const savedInvoice = { ...purFormData, id: Date.now().toString(), paidAmount: finalPaidAmount, payments: initialPayments };
-      setPurchases([savedInvoice, ...purchases]);
+      const initialPayments = finalPaidAmount > 0 ? [{ id: now, date: purFormData.date, amount: finalPaidAmount, note: 'دفعة أولية' }] : [];
+      const savedInvoice = { ...purFormData, id: now, paidAmount: finalPaidAmount, payments: initialPayments };
+
       savedInvoice.items.forEach(purchasedItem => {
         if (purchasedItem.productId.startsWith('NEW_')) {
-          updatedProducts.push({ id: purchasedItem.productId, barcode: Math.floor(1000000000 + Math.random() * 9000000000).toString(), name: purchasedItem.name, category: 'مواد مضافة تلقائياً', quantity: purchasedItem.quantity, lowStockAlert: 5, costPrice: purchasedItem.costPrice, price: purchasedItem.costPrice * 1.25 });
+          updatedProducts.push({ id: purchasedItem.productId, barcode: newBarcode(), name: purchasedItem.name, category: 'مواد مضافة تلقائياً', quantity: purchasedItem.quantity, lowStockAlert: 5, costPrice: purchasedItem.costPrice, price: purchasedItem.costPrice * 1.25 });
         } else {
           updatedProducts = updatedProducts.map(p => p.id === purchasedItem.productId ? { ...p, quantity: p.quantity + purchasedItem.quantity } : p);
         }
       });
+
+      const { data, error } = await supabase.from('purchases').insert([toDbPurchase(savedInvoice)]).select();
+      if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ فاتورة الشراء: ' + error.message });
+      if (data && data.length > 0) savedInvoice.id = data[0].id.toString();
+      setPurchases([savedInvoice, ...purchases]);
     }
-    setProducts(updatedProducts);
+
+    const synced = await persistProductChanges(updatedProducts, products);
+    setProducts(synced.products);
+    if (synced.error) {
+      setErrorModal({ isOpen: true, message: 'حُفظت الفاتورة لكن تعذّر تحديث المخزون: ' + synced.error });
+    }
     closePurModal();
   };
   const openViewPurModal = (invoice: PurchaseInvoice) => { setSelectedInvoice(invoice); setIsViewPurModalOpen(true); };
@@ -689,8 +817,8 @@ export default function App() {
 
     // Create Invoice
     const newInvoice: SalesInvoice = {
-      id: Date.now().toString(),
-      invoiceNumber: `INV-${Math.floor(1000 + Math.random() * 9000)}`,
+      id: newId(),
+      invoiceNumber: newInvoiceNumber(),
       customerName,
       date: getTodayDate(),
       dueDate: salesPaymentStatus === 'credit' ? salesDueDate : undefined,
@@ -700,11 +828,12 @@ export default function App() {
       totalAmount: cartGrandTotal,
       paidAmount: salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount,
       paymentStatus: salesPaymentStatus,
-      payments: (salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount) > 0 ? [{ id: Date.now().toString() + '1', date: getTodayDate(), amount: salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount, note: 'دفعة أولية' }] : []
+      payments: (salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount) > 0 ? [{ id: newId() + '1', date: getTodayDate(), amount: salesPaymentStatus === 'paid' ? cartGrandTotal : salesPaidAmount, note: 'دفعة أولية' }] : []
     };
     
     const dbInvoice = { invoice_number: newInvoice.invoiceNumber, customer_name: newInvoice.customerName, date: newInvoice.date, total_amount: newInvoice.totalAmount, paid_amount: newInvoice.paidAmount, payment_status: newInvoice.paymentStatus, due_date: newInvoice.dueDate, items: newInvoice.items, payments: newInvoice.payments };
-    const { data } = await supabase.from('sales_invoices').insert([dbInvoice]).select();
+    const { data, error } = await supabase.from('sales_invoices').insert([dbInvoice]).select();
+    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ الفاتورة: ' + error.message });
     if (data && data.length > 0) newInvoice.id = data[0].id.toString();
 
     setSalesInvoices([newInvoice, ...salesInvoices]);
@@ -719,7 +848,11 @@ export default function App() {
         return p;
       });
     });
-    setProducts(updatedProducts);
+    const synced = await persistProductChanges(updatedProducts, products);
+    setProducts(synced.products);
+    if (synced.error) {
+      setErrorModal({ isOpen: true, message: 'حُفظت الفاتورة لكن تعذّر خصم المخزون: ' + synced.error });
+    }
 
     // Reset POS
     setCart([]);
@@ -740,11 +873,10 @@ export default function App() {
 
     // Deduct from inventory
     const updatedInventory = products.map(p => p.id === product.id ? { ...p, quantity: p.quantity - damageFormData.quantity } : p);
-    setProducts(updatedInventory);
 
     // Create damage record
     const newDamage: DamageRecord = {
-      id: Date.now().toString(),
+      id: newId(),
       itemId: product.id,
       itemName: product.name,
       quantity: damageFormData.quantity,
@@ -754,9 +886,16 @@ export default function App() {
       date: getTodayDate()
     };
     const dbDamage = { item_id: newDamage.itemId, item_name: newDamage.itemName, quantity: newDamage.quantity, cost_price: newDamage.costPrice, total_loss: newDamage.totalLoss, reason: newDamage.reason, date: newDamage.date };
-    const { data } = await supabase.from('damages').insert([dbDamage]).select();
+    const { data, error } = await supabase.from('damages').insert([dbDamage]).select();
+    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ سجل التلف: ' + error.message });
     if (data && data.length > 0) newDamage.id = data[0].id.toString();
     setDamages([newDamage, ...damages]);
+
+    const synced = await persistProductChanges(updatedInventory, products);
+    setProducts(synced.products);
+    if (synced.error) {
+      setErrorModal({ isOpen: true, message: 'سُجّل التلف لكن تعذّر خصم المخزون: ' + synced.error });
+    }
     setIsDamageModalOpen(false);
   };
 
@@ -806,16 +945,16 @@ export default function App() {
     });
 
     // Add or Update the Produced Item in Inventory
-    let producedItemExists = updatedInventory.find(p => p.name === productionFormData.producedItemName);
+    const producedItemExists = updatedInventory.find(p => p.name === productionFormData.producedItemName);
     const costPerUnit = totalCost / productionFormData.quantityProduced;
-    
+
     if (producedItemExists) {
-      updatedInventory = updatedInventory.map(p => p.id === producedItemExists!.id ? { ...p, quantity: p.quantity + productionFormData.quantityProduced } : p);
+      updatedInventory = updatedInventory.map(p => p.id === producedItemExists.id ? { ...p, quantity: p.quantity + productionFormData.quantityProduced } : p);
     } else {
-      const newItemId = Date.now().toString();
+      // معرّف مؤقت؛ يُستبدل بالمعرّف الحقيقي بعد الإدراج في قاعدة البيانات.
       updatedInventory.push({
-        id: newItemId,
-        barcode: `PROD-${Math.floor(10000 + Math.random() * 90000)}`,
+        id: newTempProducedId(),
+        barcode: newProductionBarcode(),
         name: productionFormData.producedItemName,
         category: productionFormData.category,
         quantity: productionFormData.quantityProduced,
@@ -825,12 +964,22 @@ export default function App() {
       });
     }
 
-    setProducts(updatedInventory);
+    // نزامن المخزون أولاً حتى يحصل المنتج الجديد على معرّفه الحقيقي
+    // قبل أن نربطه بسجل الإنتاج.
+    const synced = await persistProductChanges(updatedInventory, products);
+    setProducts(synced.products);
+    if (synced.error) {
+      return setErrorModal({ isOpen: true, message: 'تعذّر تحديث المخزون: ' + synced.error });
+    }
+
+    const producedItemId = producedItemExists
+      ? producedItemExists.id
+      : synced.products.find(p => p.name === productionFormData.producedItemName)?.id ?? '';
 
     // Create production record
     const newProduction: ProductionRecord = {
-      id: Date.now().toString(),
-      producedItemId: producedItemExists?.id || Date.now().toString(),
+      id: newId(),
+      producedItemId,
       producedItemName: productionFormData.producedItemName,
       quantityProduced: productionFormData.quantityProduced,
       totalCost,
@@ -838,7 +987,8 @@ export default function App() {
       date: getTodayDate()
     };
     const dbProd = { produced_item_id: newProduction.producedItemId, produced_item_name: newProduction.producedItemName, quantity_produced: newProduction.quantityProduced, total_cost: newProduction.totalCost, components: newProduction.components, date: newProduction.date };
-    const { data } = await supabase.from('productions').insert([dbProd]).select();
+    const { data, error } = await supabase.from('productions').insert([dbProd]).select();
+    if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ سجل الإنتاج: ' + error.message });
     if (data && data.length > 0) newProduction.id = data[0].id.toString();
     setProductions([newProduction, ...productions]);
     setIsProductionModalOpen(false);
@@ -851,7 +1001,7 @@ export default function App() {
       setMaintenanceFormData(ticket);
     } else {
       setMaintenanceFormData({
-        id: '', ticketNumber: `MN-${Math.floor(10000 + Math.random() * 90000)}`, customerName: '', customerPhone: '', deviceType: '', issueDescription: '', status: 'pending', usedParts: [], estimatedCost: 0, deposit: 0, warrantyPeriod: 'بدون ضمان', receiveDate: getTodayDate()
+        id: '', ticketNumber: newTicketNumber(), customerName: '', customerPhone: '', deviceType: '', issueDescription: '', status: 'pending', usedParts: [], estimatedCost: 0, deposit: 0, warrantyPeriod: 'بدون ضمان', receiveDate: getTodayDate()
       });
     }
     setPartInput({ itemId: '', itemName: '', quantity: 1, costPrice: 0, sellPrice: 0 });
@@ -885,11 +1035,14 @@ export default function App() {
        maintenanceFormData.usedParts.forEach(part => {
          updatedProducts = updatedProducts.map(p => p.id === part.itemId ? { ...p, quantity: p.quantity - part.quantity } : p);
        });
-       setProducts(updatedProducts);
-       
-       const newTicket = { ...maintenanceFormData, id: Date.now().toString() };
+
+       const newTicket = { ...maintenanceFormData, id: newId() };
+       const { data, error } = await supabase.from('maintenance_tickets').insert([toDbMaintenance(newTicket)]).select();
+       if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ تذكرة الصيانة: ' + error.message });
+       if (data && data.length > 0) newTicket.id = data[0].id.toString();
        setMaintenanceTickets([newTicket, ...maintenanceTickets]);
     } else {
+       // التعديل يرجّع القطع القديمة للمخزن ثم يخصم القطع الجديدة.
        const originalTicket = maintenanceTickets.find(t => t.id === maintenanceFormData.id);
        if (originalTicket) {
          originalTicket.usedParts.forEach(part => {
@@ -898,11 +1051,17 @@ export default function App() {
          maintenanceFormData.usedParts.forEach(part => {
            updatedProducts = updatedProducts.map(p => p.id === part.itemId ? { ...p, quantity: p.quantity - part.quantity } : p);
          });
-         setProducts(updatedProducts);
        }
+       const { error } = await supabase.from('maintenance_tickets').update(toDbMaintenance(maintenanceFormData)).eq('id', maintenanceFormData.id);
+       if (error) return setErrorModal({ isOpen: true, message: 'تعذّر حفظ تذكرة الصيانة: ' + error.message });
        setMaintenanceTickets(maintenanceTickets.map(t => t.id === maintenanceFormData.id ? maintenanceFormData : t));
     }
-    
+
+    const synced = await persistProductChanges(updatedProducts, products);
+    setProducts(synced.products);
+    if (synced.error) {
+      setErrorModal({ isOpen: true, message: 'حُفظت التذكرة لكن تعذّر تحديث المخزون: ' + synced.error });
+    }
     setIsMaintenanceModalOpen(false);
   };
 
@@ -910,13 +1069,15 @@ export default function App() {
     if (ticket.status === 'completed' || ticket.status === 'rejected') return;
     
     const updatedTicket = { ...ticket, status: 'completed' as MaintenanceStatus, deliveryDate: getTodayDate() };
+    const { error: ticketError } = await supabase.from('maintenance_tickets').update({ status: updatedTicket.status }).eq('id', ticket.id);
+    if (ticketError) return setErrorModal({ isOpen: true, message: 'تعذّر تحديث حالة التذكرة: ' + ticketError.message });
     setMaintenanceTickets(maintenanceTickets.map(t => t.id === ticket.id ? updatedTicket : t));
-    
+
     const remainingAmount = ticket.estimatedCost - ticket.deposit;
     if (remainingAmount > 0) {
       const newInvoice: SalesInvoice = {
-        id: Date.now().toString(),
-        invoiceNumber: `INV-${Math.floor(1000 + Math.random() * 9000)}`,
+        id: newId(),
+        invoiceNumber: newInvoiceNumber(),
         customerName: ticket.customerName,
         date: getTodayDate(),
         items: [{
@@ -948,7 +1109,6 @@ export default function App() {
       const isHeaderRow = row.querySelector('th') !== null;
       const cells = Array.from(row.querySelectorAll('th, td'));
       let cleanCells = '';
-      let skipRow = false;
 
       cells.forEach((cell) => {
         const text = (cell as HTMLElement).innerText.trim();
@@ -1016,9 +1176,14 @@ ${cleanRows}
     URL.revokeObjectURL(url);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    // AuthGate يلتقط تغيّر الجلسة ويعيد عرض شاشة الدخول تلقائياً.
+  };
+
   const handleBackup = async () => {
     try {
-      const backupData: any = {};
+      const backupData: Record<string, unknown[]> = {};
       const tables = ['categories', 'products', 'sales_invoices', 'purchases', 'expenses', 'maintenance_tickets', 'damages', 'productions'];
       for (const table of tables) {
         const { data } = await supabase.from(table).select('*');
@@ -1034,7 +1199,7 @@ ${cleanRows}
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (e) {
+    } catch {
       setErrorModal({ isOpen: true, message: 'حدث خطأ أثناء أخذ النسخة الاحتياطية.' });
     }
   };
@@ -1081,6 +1246,11 @@ ${cleanRows}
           <li style={{ marginTop: 'auto', paddingTop: '10px' }}>
             <a className="nav-item" style={{ background: 'var(--success-color)', color: 'white', justifyContent: 'center' }} onClick={handleBackup}>
               <i className="fa-solid fa-database"></i> نسخ احتياطي
+            </a>
+          </li>
+          <li style={{ paddingTop: '8px' }}>
+            <a className="nav-item" style={{ justifyContent: 'center', color: 'var(--danger-color)' }} onClick={handleLogout}>
+              <i className="fa-solid fa-right-from-bracket"></i> تسجيل الخروج
             </a>
           </li>
         </ul>
@@ -2322,7 +2492,7 @@ ${cleanRows}
           <div className="modal-content animated" style={{ maxWidth: '400px', textAlign: 'center' }}>
             <div style={{ color: 'var(--danger-color)', fontSize: '48px', marginBottom: '16px' }}><i className="fa-solid fa-triangle-exclamation"></i></div>
             <h2 style={{ marginBottom: '16px', fontSize: '20px' }}>تأكيد الحذف</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>هل أنت متأكد من حذف <strong>"{deleteConfirm.title}"</strong>؟<br/>{deleteConfirm.type === 'purchasing' && <span style={{ color: 'var(--warning-color)', fontSize: '13px' }}>ملاحظة: سيتم خصم كميات هذه الفاتورة من المخزن أيضاً!</span>} لا يمكن التراجع.</p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>هل أنت متأكد من حذف <strong>&laquo;{deleteConfirm.title}&raquo;</strong>؟<br/>{deleteConfirm.type === 'purchasing' && <span style={{ color: 'var(--warning-color)', fontSize: '13px' }}>ملاحظة: سيتم خصم كميات هذه الفاتورة من المخزن أيضاً!</span>} لا يمكن التراجع.</p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setDeleteConfirm({ isOpen: false, id: '', type: 'inventory', title: '' })}>إلغاء</button>
               <button className="btn btn-delete" style={{ flex: 1, display: 'flex', justifyContent: 'center', background: 'var(--danger-color)', color: 'white' }} onClick={executeDelete}>نعم، احذف</button>
@@ -2463,7 +2633,7 @@ ${cleanRows}
                 className="btn btn-primary" 
                 style={{ flex: 2, display: 'flex', justifyContent: 'center', gap: '8px' }} 
                 onClick={() => {
-                  generateThermalReceipt(successModal.invoice, 'sales');
+                  if (successModal.invoice) generateThermalReceipt(successModal.invoice, 'sales');
                   setSuccessModal({ isOpen: false, invoice: null });
                 }}
               >
@@ -2659,7 +2829,7 @@ ${cleanRows}
                   setErrorModal({ isOpen: true, message: 'يرجى إدخال مبلغ صحيح' });
                   return;
                 }
-                const newExp = { id: Date.now().toString(), date: new Date().toISOString().split('T')[0], amount: Number(expenseModal.amount), category: expenseModal.category || 'عام', note: expenseModal.note };
+                const newExp = { id: newId(), date: new Date().toISOString().split('T')[0], amount: Number(expenseModal.amount), category: expenseModal.category || 'عام', note: expenseModal.note };
                 const dbExp = { date: newExp.date, amount: newExp.amount, category: newExp.category, description: newExp.note };
                 const { data } = await supabase.from('expenses').insert([dbExp]).select();
                 if (data && data.length > 0) newExp.id = data[0].id.toString();

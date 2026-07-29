@@ -32,6 +32,19 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# one-off DB/maintenance scripts — these have held live credentials before.
+# Keep them out of the repo; put throwaway scripts in scripts/local/.
+/scripts/local/
+*-db.mjs
+*-db.js
+*-db.py
+check_*.js
+check_*.py
+test_*.js
+test_*.py
+test-*.mjs
 
 # vercel
 .vercel
