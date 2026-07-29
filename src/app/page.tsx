@@ -1989,9 +1989,15 @@ ${cleanRows}
               const cashMovedInRange = (invoices: (PurchaseInvoice | SalesInvoice)[]) =>
                 invoices.reduce((sum, inv) => {
                   const pays = inv.payments || [];
-                  // فواتير قديمة بلا سجل دفعات: نعتمد المبلغ المدفوع بتاريخ الفاتورة.
+                  // فواتير أُنشئت قبل وجود سجل الدفعات: لا سجل لها وقد يكون
+                  // paid_amount صفراً رغم أنها مدفوعة، فنستنتج المبلغ من حالتها
+                  // وننسبه لتاريخ الفاتورة.
                   if (pays.length === 0) {
-                    return sum + (isDateInRange(inv.date) ? (inv.paidAmount || 0) : 0);
+                    if (!isDateInRange(inv.date)) return sum;
+                    const legacyPaid = inv.paymentStatus === 'paid'
+                      ? inv.totalAmount
+                      : (inv.paidAmount || 0);
+                    return sum + legacyPaid;
                   }
                   return sum + pays.filter(p => isDateInRange(p.date)).reduce((ps, p) => ps + p.amount, 0);
                 }, 0);
