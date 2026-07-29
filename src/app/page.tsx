@@ -1979,9 +1979,12 @@ ${cleanRows}
               let totalSalesProfit = 0;
               filteredSales.forEach(inv => {
                 inv.items.forEach(item => {
-                  const product = products.find(p => p.id === item.id);
-                  const cost = product ? product.costPrice : 0;
-                  totalSalesProfit += (item.price - cost) * item.quantity;
+                  // الكلفة المسجّلة في الفاتورة هي كلفة وقت البيع؛ نعتمدها بدل
+                  // كلفة المنتج الحالية حتى لا تتغيّر أرباح الماضي بتغيّر الأسعار
+                  // أو تصير صفراً إذا حُذف المنتج لاحقاً.
+                  const cost = item.costPrice ?? products.find(p => p.id === item.id)?.costPrice ?? 0;
+                  // cartQuantity هي الكمية المباعة؛ quantity رصيد المخزن وقت البيع.
+                  totalSalesProfit += (item.price - cost) * item.cartQuantity;
                 });
               });
               const damagesLoss = filteredDamages.reduce((sum, d) => sum + (d.costPrice * d.quantity), 0);
@@ -1994,76 +1997,58 @@ ${cleanRows}
               const inventorySaleValue = products.reduce((sum, p) => sum + ((Number(p.price) || 0) * (Number(p.quantity) || 0)), 0);
 
               return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                  {/* CASH BOX */}
-                  <div>
-                    <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '16px' }}><i className="fa-solid fa-vault"></i> الصندوق (الخزينة)</h3>
-                    <div className="dashboard-grid">
-                      <div className="glass-card stat-card" style={{ borderRight: '4px solid var(--success-color)' }}>
-                        <span className="stat-title">المقبوضات (الداخلة)</span>
-                        <span className="stat-value text-success">{totalCashIn.toLocaleString()} د.ع</span>
-                        <span className="stat-change" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>مبيعات نقدية + أقساط مستلمة + صيانة</span>
-                      </div>
-                      <div className="glass-card stat-card" style={{ borderRight: '4px solid var(--danger-color)' }}>
-                        <span className="stat-title">المدفوعات (الخارجة)</span>
-                        <span className="stat-value text-danger">{totalCashOut.toLocaleString()} د.ع</span>
-                        <span className="stat-change" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>مشتريات نقدية + أقساط موردين + مصاريف</span>
-                      </div>
-                      <div className="glass-card stat-card" style={{ borderRight: '4px solid var(--primary-color)', background: 'rgba(59, 130, 246, 0.05)' }}>
-                        <span className="stat-title">الرصيد الفعلي للصندوق</span>
-                        <span className="stat-value text-primary">{currentCashBalance.toLocaleString()} د.ع</span>
-                        <span className="stat-change" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>الصافي الموجود بالدرج</span>
-                      </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  {/* الأرقام الأربعة التي يحتاجها صاحب المحل يومياً.
+                      الباقي تفاصيل داعمة، فنُزلت لشريط أهدأ تحتها. */}
+                  <div className="kpi-grid">
+                    <div className="kpi kpi-primary">
+                      <span className="kpi-label"><i className="fa-solid fa-vault"></i> الرصيد بالصندوق</span>
+                      <span className="kpi-value">{currentCashBalance.toLocaleString()}<small> د.ع</small></span>
+                      <span className="kpi-hint">الموجود بالدرج الآن</span>
+                    </div>
+                    <div className={`kpi ${netProfit >= 0 ? 'kpi-good' : 'kpi-bad'}`}>
+                      <span className="kpi-label"><i className="fa-solid fa-scale-balanced"></i> الربح الصافي</span>
+                      <span className="kpi-value">{netProfit.toLocaleString()}<small> د.ع</small></span>
+                      <span className="kpi-hint">بعد خصم الخسائر والمصاريف</span>
+                    </div>
+                    <div className="kpi kpi-warn">
+                      <span className="kpi-label"><i className="fa-solid fa-hand-holding-dollar"></i> ديون لنا</span>
+                      <span className="kpi-value">{debtsForUs.toLocaleString()}<small> د.ع</small></span>
+                      <span className="kpi-hint">نطلبها من الزبائن</span>
+                    </div>
+                    <div className="kpi kpi-bad">
+                      <span className="kpi-label"><i className="fa-solid fa-file-invoice"></i> ديون علينا</span>
+                      <span className="kpi-value">{debtsOnUs.toLocaleString()}<small> د.ع</small></span>
+                      <span className="kpi-hint">يطلبها الموردون</span>
                     </div>
                   </div>
 
-                  {/* PROFIT & LOSS */}
-                  <div>
-                    <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '16px' }}><i className="fa-solid fa-scale-balanced"></i> الأرباح والخسائر</h3>
-                    <div className="dashboard-grid">
-                      <div className="glass-card stat-card">
-                        <span className="stat-title">أرباح المبيعات والصيانة</span>
-                        <span className="stat-value text-success">{(totalSalesProfit + maintenanceIncome).toLocaleString()} د.ع</span>
+                  <div className="glass-card" style={{ padding: '20px 24px' }}>
+                    <h3 className="detail-title"><i className="fa-solid fa-list-ul"></i> التفاصيل</h3>
+                    <div className="detail-grid">
+                      <div className="detail-row">
+                        <span>المقبوضات <em>مبيعات نقدية + أقساط + صيانة</em></span>
+                        <b className="up">{totalCashIn.toLocaleString()} د.ع</b>
                       </div>
-                      <div className="glass-card stat-card">
-                        <span className="stat-title">الخسائر (توالف + مصاريف)</span>
-                        <span className="stat-value text-danger">{(damagesLoss + totalExpensesAmount).toLocaleString()} د.ع</span>
+                      <div className="detail-row">
+                        <span>المدفوعات <em>مشتريات + أقساط موردين + مصاريف</em></span>
+                        <b className="down">{totalCashOut.toLocaleString()} د.ع</b>
                       </div>
-                      <div className="glass-card stat-card" style={{ background: netProfit >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${netProfit >= 0 ? 'var(--success-color)' : 'var(--danger-color)'}` }}>
-                        <span className="stat-title">الربح الصافي</span>
-                        <span className={`stat-value ${netProfit >= 0 ? 'text-success' : 'text-danger'}`}>{netProfit.toLocaleString()} د.ع</span>
+                      <div className="detail-row">
+                        <span>أرباح المبيعات والصيانة</span>
+                        <b className="up">{(totalSalesProfit + maintenanceIncome).toLocaleString()} د.ع</b>
                       </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
-                    {/* DEBTS */}
-                    <div>
-                      <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '16px' }}><i className="fa-solid fa-book-open"></i> دفتر الديون (الكلي)</h3>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div className="glass-card stat-card" style={{ padding: '16px', borderRight: '4px solid var(--warning-color)' }}>
-                          <span className="stat-title">ديون لنا (نطلب الزبائن)</span>
-                          <span className="stat-value text-warning">{debtsForUs.toLocaleString()} د.ع</span>
-                        </div>
-                        <div className="glass-card stat-card" style={{ padding: '16px', borderRight: '4px solid var(--danger-color)' }}>
-                          <span className="stat-title">ديون علينا (يطلبونا الموردين)</span>
-                          <span className="stat-value text-danger">{debtsOnUs.toLocaleString()} د.ع</span>
-                        </div>
+                      <div className="detail-row">
+                        <span>الخسائر <em>توالف + مصاريف</em></span>
+                        <b className="down">{(damagesLoss + totalExpensesAmount).toLocaleString()} د.ع</b>
                       </div>
-                    </div>
-
-                    {/* INVENTORY */}
-                    <div>
-                      <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '16px' }}><i className="fa-solid fa-boxes-stacked"></i> تقييم المخزن (رأس المال الحالي)</h3>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div className="glass-card stat-card" style={{ padding: '16px' }}>
-                          <span className="stat-title">رأس مال المخزن (بسعر الشراء)</span>
-                          <span className="stat-value text-primary">{inventoryCostValue.toLocaleString()} د.ع</span>
-                        </div>
-                        <div className="glass-card stat-card" style={{ padding: '16px' }}>
-                          <span className="stat-title">القيمة المتوقعة للبيع</span>
-                          <span className="stat-value text-success">{inventorySaleValue.toLocaleString()} د.ع</span>
-                        </div>
+                      <div className="detail-row">
+                        <span>رأس مال المخزن <em>بسعر الشراء</em></span>
+                        <b>{inventoryCostValue.toLocaleString()} د.ع</b>
+                      </div>
+                      <div className="detail-row">
+                        <span>القيمة المتوقعة للبيع</span>
+                        <b>{inventorySaleValue.toLocaleString()} د.ع</b>
                       </div>
                     </div>
                   </div>

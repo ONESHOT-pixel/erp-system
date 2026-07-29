@@ -2008,3 +2008,124 @@ select {
   .ledger-row { flex-wrap: wrap; }
   .ledger-list { max-height: 200px; }
 }
+
+/* ===== لوحة التقارير: أرقام رئيسية + تفاصيل هادئة ===== */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+}
+
+.kpi {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px;
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: transform 0.35s var(--ease-out), box-shadow 0.35s var(--ease-out);
+}
+
+/* شريط لوني جانبي يميّز نوع الرقم بدل تلوين البطاقة كلها */
+.kpi::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--kpi-accent, var(--neon-blue));
+  box-shadow: 0 0 14px var(--kpi-accent, var(--neon-blue));
+}
+
+.kpi:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+
+.kpi-primary { --kpi-accent: var(--neon-blue); }
+.kpi-good    { --kpi-accent: var(--neon-green); }
+.kpi-warn    { --kpi-accent: #fbbf24; }
+.kpi-bad     { --kpi-accent: #f87171; }
+
+.kpi-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.kpi-label i { color: var(--kpi-accent); }
+
+.kpi-value {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.15;
+  color: var(--kpi-accent);
+}
+
+.kpi-value small {
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.kpi-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 2px 32px;
+}
+
+.detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  font-size: 13px;
+}
+
+.detail-row span { color: var(--text-secondary); }
+
+/* الشرح الصغير تحت اسم البند */
+.detail-row em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+.detail-row b {
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.detail-row b.up   { color: var(--neon-green); }
+.detail-row b.down { color: #f87171; }
+
+@media (max-width: 768px) {
+  .kpi { padding: 16px; }
+  .kpi-value { font-size: 24px; }
+  .detail-grid { grid-template-columns: 1fr; gap: 0; }
+}
